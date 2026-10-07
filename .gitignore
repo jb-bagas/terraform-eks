@@ -1,0 +1,29 @@
+# Terraform local files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Ignore real variable files (may contain secrets)
+*.tfvars
+*.tfvars.json
+
+# Ignore real backend config files (contains S3 bucket names, etc.)
+*.tfbackend
+
+# But keep the example files so others can see the structure
+!vars/*.tfvars.example
+!backend/*.tfbackend.example
+
+# OS / IDE files
+.DS_Store
+.idea/
+.vscode/
+*.swp
