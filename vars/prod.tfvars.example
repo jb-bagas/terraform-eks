@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────
+# GLOBAL CONFIGURATION
+# ─────────────────────────────────────────────
+environment = "prod"
+aws_region      = "us-east-1"
+
+# ─────────────────────────────────────────────
+# NETWORKING (VPC) - Different CIDR to avoid peering conflicts
+# ─────────────────────────────────────────────
+vpc_cidr        = "10.1.0.0/16"
+availability_zones             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# ─────────────────────────────────────────────
+# EKS CLUSTER ACCESS
+# ─────────────────────────────────────────────
+admin_role_arn = "arn:aws:iam::123456789012:role/Prod-Admin" # Replace with real ARN
+
+# ─────────────────────────────────────────────
+# FEATURE FLAGS
+# ─────────────────────────────────────────────
+enable_alb_controller     = true
+enable_secrets_csi        = true
+enable_ebs_csi            = true
+enable_observability      = true
+enable_cluster_autoscaler = true
+enable_metrics_server     = true
+
+# ─────────────────────────────────────────────
+# EKS MANAGED NODE GROUPS
+# ─────────────────────────────────────────────
+node_groups = {
+  general = {
+    instance_types = ["m6i.large"] # Better performance for prod
+    disk_size      = 100
+    ami_type       = "AL2023_x86_64_STANDARD"
+    capacity_type  = "ON_DEMAND"   # No Spot instances in prod
+    min_size       = 3             # High availability across AZs
+    max_size       = 12
+    desired_size   = 3
+    labels = {
+      role        = "general"
+      environment = "prod"
+    }
+    taints = null
+  }
+
+  # Dedicated system node group for production add-ons
+  system = {
+    instance_types = ["t3.medium"]
+    disk_size      = 50
+    ami_type       = "AL2023_x86_64_STANDARD"
+    capacity_type  = "ON_DEMAND"
+    min_size       = 2
+    max_size       = 4
+    desired_size   = 2
+    labels = {
+      role = "system"
+    }
+    taints = [
+      {
+        key    = "CriticalAddonsOnly"
+        value  = "true"
+        effect = "NO_SCHEDULE"
+      }
+    ]
+  }
+}

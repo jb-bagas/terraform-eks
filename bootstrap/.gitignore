@@ -1,0 +1,7 @@
+# Local state for bootstrap - NEVER commit this
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!terraform.tfvars.example

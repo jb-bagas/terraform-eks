@@ -1,0 +1,7 @@
+# Copy this file to backend/dev.tfbackend and fill in your real values
+
+bucket       = "your-org-terraform-state-bucket"
+key          = "dev/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true  # Native S3 state locking (Terraform 1.10+)
