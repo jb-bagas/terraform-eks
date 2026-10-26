@@ -10,14 +10,22 @@ resource "helm_release" "cluster_autoscaler" {
   atomic          = true
   cleanup_on_fail = true
   wait            = true
+  timeout         = 600
 
   values = [yamlencode({
-    # ... existing values ...
+    cloudProvider = "aws"
+    awsRegion     = var.aws_region
+    replicaCount  = local.is_prod ? 2 : 1
+
+    autoDiscovery = {
+      clusterName = var.cluster_name
+    }
+
     image = {
       repository = "registry.k8s.io/autoscaling/cluster-autoscaler"
-      tag        = "v1.31.0" # Explicitly match your cluster version
+      tag        = local.cluster_autoscaler_image_tag
     }
-    # ... existing values ...
+
     extraArgs = {
       "scale-down-delay-after-add"       = "10m"
       "scale-down-unneeded-time"         = "10m"
@@ -26,8 +34,29 @@ resource "helm_release" "cluster_autoscaler" {
       "skip-nodes-with-system-pods"      = "false"
       "expander"                         = "least-waste"
       "balance-similar-node-groups"      = "true"
-      "aws-use-static-instance-list"     = "true" # Important for EKS
     }
+
+    rbac = {
+      create = true
+      serviceAccount = {
+        create = true
+        name   = "cluster-autoscaler"
+        annotations = {
+          "eks.amazonaws.com/role-arn" = var.cluster_autoscaler_role_arn
+        }
+      }
+    }
+
+    resources = {
+      requests = { cpu = "100m", memory = "300Mi" }
+      limits   = { cpu = "500m", memory = "600Mi" }
+    }
+
+    podDisruptionBudget = {
+      maxUnavailable = 1
+    }
+
+    tolerations = local.system_tolerations
   })]
 }
 
@@ -45,11 +74,18 @@ resource "helm_release" "metrics_server" {
   wait            = true
 
   values = [yamlencode({
-    replicas = 2
+    replicas = local.is_prod ? 3 : 2
+
     resources = {
       requests = { cpu = "100m", memory = "200Mi" }
       limits   = { cpu = "200m", memory = "300Mi" }
     }
+
+    podDisruptionBudget = {
+      enabled        = true
+      maxUnavailable = 1
+    }
+
     tolerations = local.system_tolerations
   })]
 }

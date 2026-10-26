@@ -8,6 +8,11 @@ output "state_bucket_arn" {
   value       = aws_s3_bucket.tfstate.arn
 }
 
+output "log_bucket_name" {
+  description = "The optional access-log bucket name"
+  value       = try(aws_s3_bucket.logs[0].bucket, null)
+}
+
 output "backend_configuration" {
   description = "Copy this into your backend/*.tfbackend files"
   value = {

@@ -2,27 +2,33 @@
 # Core inputs
 # ─────────────────────────────────────────────
 variable "cluster_name" {
-  type = string
+  description = "Name of the EKS cluster"
+  type        = string
 }
 
-variable "cluster_endpoint" {
-  type = string
+variable "cluster_version" {
+  description = "Kubernetes version, used to select compatible add-on images"
+  type        = string
 }
 
 variable "aws_region" {
-  type = string
+  description = "AWS region"
+  type        = string
 }
 
 variable "vpc_id" {
-  type = string
+  description = "VPC ID"
+  type        = string
 }
 
 variable "environment" {
-  type = string
+  description = "Environment name"
+  type        = string
 }
 
 variable "tags" {
-  type = map(string)
+  description = "Tags applied to AWS resources"
+  type        = map(string)
 }
 
 # ─────────────────────────────────────────────
@@ -59,7 +65,7 @@ variable "enable_metrics_server" {
 }
 
 # ─────────────────────────────────────────────
-# IRSA Role ARNs
+# IRSA role ARNs
 # ─────────────────────────────────────────────
 variable "alb_controller_role_arn" {
   type = string
@@ -104,9 +110,16 @@ variable "adot_collector_version" {
   default = "0.108.0"
 }
 
+variable "adot_collector_image_tag" {
+  description = "AWS Distro for OpenTelemetry Collector image tag (not the Helm chart version)"
+  type        = string
+  default     = "v0.40.0"
+}
+
 variable "ebs_csi_version" {
-  type    = string
-  default = "2.35.0"
+  description = "EBS CSI Helm chart. 2.62.0+ is required for the Kubernetes 1.36 VolumeAttributesClass API."
+  type        = string
+  default     = "2.62.0"
 }
 
 variable "cluster_autoscaler_version" {
@@ -117,4 +130,10 @@ variable "cluster_autoscaler_version" {
 variable "metrics_server_version" {
   type    = string
   default = "3.12.2"
+}
+
+variable "cluster_autoscaler_image_tag" {
+  description = "Override the Cluster Autoscaler image tag. Defaults to v<cluster_version>.0."
+  type        = string
+  default     = ""
 }

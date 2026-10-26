@@ -1,24 +1,35 @@
 # ─────────────────────────────────────────────
 # GLOBAL CONFIGURATION
 # ─────────────────────────────────────────────
-environment = "dev"
+environment     = "dev"
 aws_region      = "us-east-1"
+cluster_version = "1.36" # Must be supported by EKS in this region.
 
 # ─────────────────────────────────────────────
 # NETWORKING (VPC)
 # ─────────────────────────────────────────────
-vpc_cidr        = "10.0.0.0/16"
-availability_zones             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
 
 # ─────────────────────────────────────────────
 # EKS CLUSTER ACCESS
 # ─────────────────────────────────────────────
-# Optional: Add your IAM user/role ARN here to gain cluster admin access
-# Example: "arn:aws:iam::123456789012:role/DevOps-Admin"
-admin_role_arn = "" 
+# Optional for dev: leave empty to let Terraform resolve the current caller.
+# Use an IAM role/user ARN (not an STS assumed-role ARN).
+admin_role_arn = ""
+
+# Restrict this before using a shared account.
+enable_public_endpoint = true
+public_access_cidrs    = ["0.0.0.0/0"]
 
 # ─────────────────────────────────────────────
-# FEATURE FLAGS (Toggle Add-ons On/Off)
+# SECRETS
+# ─────────────────────────────────────────────
+# Narrow this to specific secret ARNs in shared environments.
+secrets_manager_secret_arns = ["*"]
+
+# ─────────────────────────────────────────────
+# FEATURE FLAGS (toggle add-ons)
 # ─────────────────────────────────────────────
 enable_alb_controller     = true
 enable_secrets_csi        = true
@@ -31,12 +42,12 @@ enable_metrics_server     = true
 # EKS MANAGED NODE GROUPS
 # ─────────────────────────────────────────────
 node_groups = {
-  # General purpose node group for your applications
+  # General purpose node group for applications.
   general = {
-    instance_types = ["t3.medium"] # Cost-effective for dev
+    instance_types = ["t3.medium"] # Cost-effective for dev.
     disk_size      = 50
     ami_type       = "AL2023_x86_64_STANDARD"
-    capacity_type  = "SPOT"        # Huge cost savings for dev (up to 70% off)
+    capacity_type  = "SPOT" # Large savings for non-production.
     min_size       = 1
     max_size       = 3
     desired_size   = 1
@@ -44,16 +55,15 @@ node_groups = {
       role        = "general"
       environment = "dev"
     }
-    taints = null # No taints for general workloads
+    taints = []
   }
 
-  # Optional: Dedicated node group for system add-ons (ALB, CSI, etc.)
-  # Uncomment the block below if you want to isolate system workloads
+  # Optional dedicated system node group. Uncomment to isolate add-ons.
   # system = {
   #   instance_types = ["t3.small"]
   #   disk_size      = 30
   #   ami_type       = "AL2023_x86_64_STANDARD"
-  #   capacity_type  = "ON_DEMAND" # Keep critical add-ons on stable nodes
+  #   capacity_type  = "ON_DEMAND"
   #   min_size       = 1
   #   max_size       = 2
   #   desired_size   = 1

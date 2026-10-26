@@ -18,14 +18,13 @@ resource "helm_release" "alb_controller" {
     region      = var.aws_region
     vpcId       = var.vpc_id
 
-    # HA: 2 replicas + PDB
+    # HA: 2 replicas in dev, 3 in prod.
     replicaCount = local.is_prod ? 3 : 2
 
     podDisruptionBudget = {
       maxUnavailable = 1
     }
 
-    # Production resource limits
     resources = {
       requests = {
         cpu    = "100m"
@@ -46,7 +45,6 @@ resource "helm_release" "alb_controller" {
       }
     }
 
-    # Security context
     podSecurityContext = {
       fsGroup = 65534
     }
@@ -59,17 +57,9 @@ resource "helm_release" "alb_controller" {
       }
     }
 
-    # Control which node groups run the controller
     nodeSelector = {
       "kubernetes.io/os" = "linux"
     }
     tolerations = local.system_tolerations
-
-    # Enable access logging to S3 (configure bucket separately)
-    # enableShield        = true
-    # enableWaf           = true
-    # enableWafv2         = true
   })]
-
-  depends_on = [helm_release.ebs_csi] # Ensure CSI driver is available
 }

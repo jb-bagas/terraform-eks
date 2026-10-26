@@ -2,6 +2,10 @@
 **/.terraform/*
 *.tfstate
 *.tfstate.*
+*.tfplan
+*.tfplan.json
+/tfplan
+/plan.txt
 crash.log
 crash.*.log
 override.tf
@@ -15,12 +19,20 @@ terraform.rc
 *.tfvars
 *.tfvars.json
 
-# Ignore real backend config files (contains S3 bucket names, etc.)
+# Ignore real backend config files (contain S3 bucket names, etc.)
 *.tfbackend
 
-# But keep the example files so others can see the structure
+# Keep the examples
 !vars/*.tfvars.example
 !backend/*.tfbackend.example
+!bootstrap/terraform.tfvars.example
+
+# Local Kubernetes / credentials files
+kubeconfig
+kubeconfig.*
+*.pem
+.env
+.env.*
 
 # OS / IDE files
 .DS_Store

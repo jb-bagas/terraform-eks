@@ -1,0 +1,128 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+      action:
+        description: Terraform action
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TF_ENV: ${{ github.event.inputs.environment || 'dev' }}
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+jobs:
+  terraform:
+    name: Terraform (${{ github.event.inputs.environment || 'dev' }})
+    runs-on: ${{ vars.TF_RUNNER_LABEL || 'ubuntu-latest' }}
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-Terraform-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write environment backend config
+        env:
+          BACKEND_BUCKET: ${{ env.TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BACKEND_BUCKET}" ]; then
+            echo "::error::Repository/environment variable TF_STATE_BUCKET is not set."
+            exit 1
+          fi
+          mkdir -p backend vars
+          cat > "backend/${TF_ENV}.tfbackend" <<EOF
+          bucket       = "${BACKEND_BUCKET}"
+          key          = "${TF_ENV}/terraform.tfstate"
+          region       = "${AWS_REGION}"
+          encrypt      = true
+          use_lockfile = true
+          EOF
+
+      - name: Write environment tfvars from secret
+        env:
+          TFVARS: ${{ secrets.TF_VARS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TFVARS}" ]; then
+            echo "::error::Environment secret TF_VARS is not set."
+            exit 1
+          fi
+          printf '%s\n' "${TFVARS}" > "vars/${TF_ENV}.tfvars"
+          chmod 600 "vars/${TF_ENV}.tfvars"
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        if: >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+        run: |
+          set -o pipefail
+          terraform plan -no-color -input=false -lock-timeout=5m \
+            -var-file="vars/${TF_ENV}.tfvars" -out=tfplan | tee plan.txt
+
+      - name: Upload plan
+        if: >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ env.TF_ENV }}-${{ github.run_id }}
+          path: |
+            tfplan
+            plan.txt
+          retention-days: 5
+
+      - name: Terraform apply
+        if: >-
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        run: |
+          terraform apply -no-color -input=false -auto-approve -lock-timeout=5m \
+            -var-file="vars/${TF_ENV}.tfvars"

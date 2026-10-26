@@ -1,5 +1,5 @@
 terraform {
-  # Requires Terraform 1.9+ for S3 native locking
+  # Requires Terraform 1.10+ for native S3 state locking (`use_lockfile`).
   required_version = ">= 1.10.0"
 
   backend "s3" {}

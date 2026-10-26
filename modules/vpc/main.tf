@@ -1,5 +1,6 @@
 locals {
-  # Carve /20 subnets out of the /16 VPC CIDR
+  # Carve /20 subnets out of the /16 VPC CIDR. Each AZ gets one public and
+  # one private subnet; the private block is offset by the number of AZs.
   public_subnet_cidrs  = [for i, az in var.azs : cidrsubnet(var.vpc_cidr, 4, i)]
   private_subnet_cidrs = [for i, az in var.azs : cidrsubnet(var.vpc_cidr, 4, i + length(var.azs))]
 
@@ -20,7 +21,7 @@ resource "aws_vpc" "this" {
 }
 
 # ─────────────────────────────────────────────
-# VPC Flow Logs (Production Grade Security)
+# VPC FLOW LOGS
 # ─────────────────────────────────────────────
 resource "aws_flow_log" "this" {
   count                = var.enable_flow_logs ? 1 : 0
@@ -36,7 +37,7 @@ resource "aws_flow_log" "this" {
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   count             = var.enable_flow_logs ? 1 : 0
   name              = "/aws/vpc/flowlogs/${var.cluster_name}"
-  retention_in_days = 30
+  retention_in_days = var.flow_log_retention_days
   tags              = local.common_tags
 }
 
@@ -54,6 +55,8 @@ resource "aws_iam_role" "vpc_flow_logs" {
       }
     }]
   })
+
+  tags = local.common_tags
 }
 
 resource "aws_iam_role_policy" "vpc_flow_logs" {
@@ -63,22 +66,30 @@ resource "aws_iam_role_policy" "vpc_flow_logs" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Action = [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents",
-        "logs:DescribeLogGroups",
-        "logs:DescribeLogStreams"
-      ]
-      Effect   = "Allow"
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Effect = "Allow"
+        Resource = [
+          aws_cloudwatch_log_group.vpc_flow_logs[0].arn,
+          "${aws_cloudwatch_log_group.vpc_flow_logs[0].arn}:*"
+        ]
+      },
+      {
+        Action   = ["logs:DescribeLogGroups"]
+        Effect   = "Allow"
+        Resource = "*"
+      }
+    ]
   })
 }
 
 # ─────────────────────────────────────────────
-# Internet Gateway
+# INTERNET GATEWAY
 # ─────────────────────────────────────────────
 resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
@@ -106,10 +117,12 @@ resource "aws_subnet" "public" {
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
+
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.this.id
   }
+
   tags = merge(local.common_tags, {
     Name = "${var.cluster_name}-public-rt"
   })
@@ -134,16 +147,16 @@ resource "aws_subnet" "private" {
     Name                                        = "${var.cluster_name}-private-${var.azs[count.index]}"
     "kubernetes.io/role/internal-elb"           = "1"
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
-    "karpenter.sh/discovery"                    = var.cluster_name
   })
 }
 
 # ─────────────────────────────────────────────
-# NAT Gateway (Dynamic: Single vs Multi-AZ)
+# NAT GATEWAY (single for cost, one per AZ for prod)
 # ─────────────────────────────────────────────
 resource "aws_eip" "nat" {
   count  = var.single_nat_gateway ? 1 : length(var.azs)
   domain = "vpc"
+
   tags = merge(local.common_tags, {
     Name = "${var.cluster_name}-nat-eip-${count.index}"
   })
@@ -152,12 +165,14 @@ resource "aws_eip" "nat" {
 resource "aws_nat_gateway" "this" {
   count         = var.single_nat_gateway ? 1 : length(var.azs)
   allocation_id = aws_eip.nat[count.index].id
-  # Explicitly use index 0 for single NAT to avoid any count evaluation confusion
-  subnet_id = var.single_nat_gateway ? aws_subnet.public[0].id : aws_subnet.public[count.index].id
+  subnet_id     = var.single_nat_gateway ? aws_subnet.public[0].id : aws_subnet.public[count.index].id
+
+  connectivity_type = "public"
 
   tags = merge(local.common_tags, {
     Name = "${var.cluster_name}-nat-${count.index}"
   })
+
   depends_on = [aws_internet_gateway.this]
 }
 

@@ -1,3 +1,13 @@
+data "aws_partition" "current" {}
+
+locals {
+  partition = data.aws_partition.current.partition
+
+  # Used in IRSA trust policies. The OIDC issuer is a URL; the trust policy
+  # condition key drops the scheme.
+  oidc_issuer_host = replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")
+}
+
 # ─────────────────────────────────────────────
 # 1. CLUSTER IAM ROLE
 # ─────────────────────────────────────────────
@@ -19,8 +29,60 @@ resource "aws_iam_role" "cluster" {
 }
 
 resource "aws_iam_role_policy_attachment" "cluster" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  policy_arn = "arn:${local.partition}:iam::aws:policy/AmazonEKSClusterPolicy"
   role       = aws_iam_role.cluster.name
+}
+
+# EKS needs KMS permissions on the cluster role to use a customer-managed key
+# for encryption_config. Without this the cluster cannot be created.
+resource "aws_iam_role_policy" "cluster_kms" {
+  name = "${var.cluster_name}-cluster-kms"
+  role = aws_iam_role.cluster.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "UseEksEncryptionKey"
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = var.kms_key_arn
+      }
+    ]
+  })
+}
+
+# Control-plane logs are delivered by EKS; scoped permissions avoid attaching
+# the broad CloudWatchLogsFullAccess managed policy.
+resource "aws_iam_role_policy" "cluster_cloudwatch" {
+  name = "${var.cluster_name}-cluster-cloudwatch"
+  role = aws_iam_role.cluster.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ]
+      Resource = [
+        aws_cloudwatch_log_group.cluster.arn,
+        "${aws_cloudwatch_log_group.cluster.arn}:*"
+      ]
+    }]
+  })
 }
 
 # ─────────────────────────────────────────────
@@ -31,10 +93,16 @@ resource "aws_eks_cluster" "this" {
   version  = var.cluster_version
   role_arn = aws_iam_role.cluster.arn
 
+  # EKS installs the default self-managed add-ons at cluster creation. The
+  # aws_eks_addon resources below adopt and manage them explicitly; setting
+  # this to false would force replacement of an existing cluster.
+  bootstrap_self_managed_addons = true
+
   vpc_config {
     subnet_ids              = var.subnet_ids
     endpoint_private_access = true
     endpoint_public_access  = var.enable_public_endpoint
+    public_access_cidrs     = var.enable_public_endpoint ? var.public_access_cidrs : null
     security_group_ids      = [aws_security_group.cluster.id]
   }
 
@@ -60,6 +128,8 @@ resource "aws_eks_cluster" "this" {
 
   depends_on = [
     aws_iam_role_policy_attachment.cluster,
+    aws_iam_role_policy.cluster_kms,
+    aws_iam_role_policy.cluster_cloudwatch,
     aws_cloudwatch_log_group.cluster
   ]
 
@@ -68,13 +138,16 @@ resource "aws_eks_cluster" "this" {
 
 resource "aws_cloudwatch_log_group" "cluster" {
   name              = "/aws/eks/${var.cluster_name}/cluster"
-  retention_in_days = 30
+  retention_in_days = var.cluster_log_retention_days
   tags              = var.common_tags
 }
 
 # ─────────────────────────────────────────────
 # 3. CLUSTER SECURITY GROUP
 # ─────────────────────────────────────────────
+# EKS creates and manages the shared cluster security group that allows
+# control-plane <-> node traffic. This additional group is available for
+# explicit rules; it is attached to the control plane below.
 resource "aws_security_group" "cluster" {
   name        = "${var.cluster_name}-cluster-sg"
   description = "Communication between EKS control plane and nodes"
@@ -85,14 +158,14 @@ resource "aws_security_group" "cluster" {
   })
 }
 
-resource "aws_security_group_rule" "cluster_ingress_from_nodes" {
-  description              = "Node to control plane API"
-  type                     = "ingress"
-  from_port                = 443
-  to_port                  = 443
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.cluster.id
-  source_security_group_id = aws_security_group.node.id
+resource "aws_security_group_rule" "cluster_ingress_from_vpc" {
+  description       = "HTTPS from the VPC to the EKS API endpoint"
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.cluster.id
+  cidr_blocks       = distinct(concat([var.vpc_cidr], var.endpoint_access_cidrs))
 }
 
 resource "aws_security_group_rule" "cluster_egress" {
@@ -126,61 +199,53 @@ resource "aws_iam_role" "node" {
 }
 
 resource "aws_iam_role_policy_attachment" "node_worker" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.node.name
-}
-
-resource "aws_iam_role_policy_attachment" "node_cni" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  policy_arn = "arn:${local.partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy"
   role       = aws_iam_role.node.name
 }
 
 resource "aws_iam_role_policy_attachment" "node_ecr" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  policy_arn = "arn:${local.partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
   role       = aws_iam_role.node.name
 }
 
 # ─────────────────────────────────────────────
-# 5. NODE SECURITY GROUP
+# 5. VPC CNI IRSA ROLE
 # ─────────────────────────────────────────────
-resource "aws_security_group" "node" {
-  name        = "${var.cluster_name}-node-sg"
-  description = "Security group for EKS worker nodes"
-  vpc_id      = var.vpc_id
+# Keep AWS CNI permissions off the node role and scope them to the aws-node
+# service account instead.
+data "aws_iam_policy_document" "vpc_cni_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
 
-  tags = merge(var.common_tags, {
-    Name = "${var.cluster_name}-node-sg"
-  })
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.this.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_issuer_host}:sub"
+      values   = ["system:serviceaccount:kube-system:aws-node"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_issuer_host}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+  }
 }
 
-resource "aws_security_group_rule" "node_ingress_from_cluster" {
-  description              = "Control plane to nodes"
-  type                     = "ingress"
-  from_port                = 1025
-  to_port                  = 65535
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.node.id
-  source_security_group_id = aws_security_group.cluster.id
+resource "aws_iam_role" "vpc_cni" {
+  name               = "${var.cluster_name}-vpc-cni"
+  assume_role_policy = data.aws_iam_policy_document.vpc_cni_assume_role.json
+  tags               = var.common_tags
 }
 
-resource "aws_security_group_rule" "node_ingress_from_nodes" {
-  description              = "Node to node communication"
-  type                     = "ingress"
-  from_port                = 0
-  to_port                  = 0
-  protocol                 = "-1"
-  security_group_id        = aws_security_group.node.id
-  source_security_group_id = aws_security_group.node.id
-}
-
-resource "aws_security_group_rule" "node_egress" {
-  description       = "Allow all outbound"
-  type              = "egress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  security_group_id = aws_security_group.node.id
-  cidr_blocks       = ["0.0.0.0/0"]
+resource "aws_iam_role_policy_attachment" "vpc_cni" {
+  policy_arn = "arn:${local.partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.vpc_cni.name
 }
 
 # ─────────────────────────────────────────────
@@ -205,7 +270,9 @@ resource "aws_eks_node_group" "this" {
     desired_size = each.value.desired_size
   }
 
-  labels = merge(var.common_tags, each.value.labels)
+  # Only user-supplied labels belong on Kubernetes nodes; common_tags contains
+  # billing tags that are not necessarily valid or useful labels.
+  labels = each.value.labels
 
   dynamic "taint" {
     for_each = each.value.taints != null ? each.value.taints : []
@@ -220,39 +287,49 @@ resource "aws_eks_node_group" "this" {
     max_unavailable = 1
   }
 
+  # Cluster Autoscaler is authoritative for desired capacity when enabled.
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
+  }
+
   depends_on = [
     aws_eks_cluster.this,
+    aws_eks_access_entry.node_role,
+    aws_eks_addon.vpc_cni,
+    aws_eks_addon.kube_proxy,
     aws_iam_role_policy_attachment.node_worker,
-    aws_iam_role_policy_attachment.node_cni,
     aws_iam_role_policy_attachment.node_ecr
   ]
 
-  tags = var.common_tags
+  tags = merge(var.common_tags, {
+    "k8s.io/cluster-autoscaler/enabled"             = "true"
+    "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
+  })
 }
 
 # ─────────────────────────────────────────────
-# 7. CLUSTER ADMIN ACCESS ENTRY
+# 7. CLUSTER ACCESS ENTRIES
 # ─────────────────────────────────────────────
+# Managed node groups need the node role to authenticate to the API. Keep the
+# node entry alongside the optional human/CI admin entry.
 resource "aws_eks_access_entry" "node_role" {
-  cluster_name  = aws_eks_cluster.this.name # ← Direct reference creates dependency
+  cluster_name  = aws_eks_cluster.this.name
   principal_arn = aws_iam_role.node.arn
   type          = "EC2_LINUX"
 }
 
 resource "aws_eks_access_entry" "admin" {
   count         = var.admin_role_arn != "" ? 1 : 0
-  cluster_name  = var.cluster_name
+  cluster_name  = aws_eks_cluster.this.name
   principal_arn = var.admin_role_arn
   type          = "STANDARD"
-
-  depends_on = [aws_eks_cluster.this]
 }
 
 resource "aws_eks_access_policy_association" "admin" {
   count         = var.admin_role_arn != "" ? 1 : 0
-  cluster_name  = var.cluster_name
+  cluster_name  = aws_eks_cluster.this.name
   principal_arn = var.admin_role_arn
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  policy_arn    = "arn:${local.partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
   access_scope {
     type = "cluster"
@@ -281,10 +358,12 @@ resource "aws_iam_openid_connect_provider" "this" {
 resource "aws_eks_addon" "vpc_cni" {
   cluster_name                = aws_eks_cluster.this.name
   addon_name                  = "vpc-cni"
+  service_account_role_arn    = aws_iam_role.vpc_cni.arn
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
-  depends_on                  = [aws_eks_node_group.this]
-  tags                        = var.common_tags
+
+  depends_on = [aws_iam_role_policy_attachment.vpc_cni]
+  tags       = var.common_tags
 }
 
 resource "aws_eks_addon" "kube_proxy" {

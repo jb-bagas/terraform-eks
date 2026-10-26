@@ -1,3 +1,6 @@
+data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
+
 # Amazon Managed Prometheus Workspace
 resource "aws_prometheus_workspace" "this" {
   count = var.enable_observability ? 1 : 0
@@ -13,8 +16,8 @@ resource "aws_grafana_workspace" "this" {
   name                     = "${var.cluster_name}-amg"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"]
-  permission_type          = "SERVICE_MANAGED"
-  role_arn                 = aws_iam_role.grafana[0].arn
+  permission_type          = "CUSTOMER_MANAGED"
+  role_arn                 = try(aws_iam_role.grafana[0].arn, null)
 
   data_sources = ["PROMETHEUS", "CLOUDWATCH", "XRAY"]
   tags         = var.tags
@@ -30,6 +33,14 @@ resource "aws_iam_role" "grafana" {
       Action    = "sts:AssumeRole"
       Effect    = "Allow"
       Principal = { Service = "grafana.amazonaws.com" }
+      Condition = {
+        StringEquals = {
+          "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+        }
+        ArnLike = {
+          "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:grafana:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workspace/*"
+        }
+      }
     }]
   })
   tags = var.tags
@@ -38,16 +49,22 @@ resource "aws_iam_role" "grafana" {
 resource "aws_iam_role_policy_attachment" "grafana_prometheus" {
   count      = var.enable_observability ? 1 : 0
   role       = aws_iam_role.grafana[0].name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonPrometheusQueryAccess"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonPrometheusQueryAccess"
 }
 
 resource "aws_iam_role_policy_attachment" "grafana_cloudwatch" {
   count      = var.enable_observability ? 1 : 0
   role       = aws_iam_role.grafana[0].name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchReadOnlyAccess"
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchReadOnlyAccess"
 }
 
-# ADOT Collector (DaemonSet with full production config)
+resource "aws_iam_role_policy_attachment" "grafana_xray" {
+  count      = var.enable_observability ? 1 : 0
+  role       = aws_iam_role.grafana[0].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AWSXrayReadOnlyAccess"
+}
+
+# ADOT Collector (DaemonSet with metrics + traces pipelines)
 resource "helm_release" "adot_collector" {
   count = var.enable_observability ? 1 : 0
 
@@ -67,9 +84,9 @@ resource "helm_release" "adot_collector" {
 
     image = {
       repository = "public.ecr.aws/aws-observability/aws-otel-collector"
+      tag        = var.adot_collector_image_tag
     }
 
-    # IRSA
     serviceAccount = {
       create = true
       name   = "adot-collector"
@@ -78,7 +95,23 @@ resource "helm_release" "adot_collector" {
       }
     }
 
-    # Resource limits (crucial for DaemonSets to avoid node pressure)
+    # Required for the prometheus receiver's Kubernetes service discovery.
+    clusterRole = {
+      create = true
+      rules = [
+        {
+          apiGroups = [""]
+          resources = ["pods", "nodes", "nodes/metrics", "nodes/stats", "nodes/proxy", "namespaces", "services", "endpoints"]
+          verbs     = ["get", "list", "watch"]
+        },
+        {
+          apiGroups = ["apps"]
+          resources = ["replicasets", "deployments", "statefulsets", "daemonsets"]
+          verbs     = ["get", "list", "watch"]
+        }
+      ]
+    }
+
     resources = {
       requests = { cpu = "100m", memory = "256Mi" }
       limits   = { cpu = "500m", memory = "1Gi" }
@@ -86,7 +119,6 @@ resource "helm_release" "adot_collector" {
 
     tolerations = local.system_tolerations
 
-    # Full production-grade collector config
     config = {
       receivers = {
         otlp = {
@@ -131,8 +163,10 @@ resource "helm_release" "adot_collector" {
                 job_name              = "kubernetes-nodes"
                 kubernetes_sd_configs = [{ role = "node" }]
                 scheme                = "https"
-                tls_config            = { insecure_skip_verify = true }
-                bearer_token_file     = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+                tls_config = {
+                  ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+                }
+                bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
               }
             ]
           }
@@ -156,16 +190,22 @@ resource "helm_release" "adot_collector" {
       }
       exporters = {
         prometheusremotewrite = {
-          endpoint                         = "http://${aws_prometheus_workspace.this[0].prometheus_endpoint}api/v1/remote_write"
+          endpoint                         = local.amp_remote_write_endpoint
           auth                             = { authenticator = "sigv4auth" }
           resource_to_telemetry_conversion = { enabled = true }
         }
-        awsxray = { region = var.aws_region }
-        debug   = { verbosity = "basic" }
+        awsxray = {
+          region = var.aws_region
+        }
       }
       extensions = {
-        sigv4auth    = { region = var.aws_region }
-        health_check = { endpoint = "0.0.0.0:13133" }
+        sigv4auth = {
+          region  = var.aws_region
+          service = "aps"
+        }
+        health_check = {
+          endpoint = "0.0.0.0:13133"
+        }
       }
       service = {
         extensions = ["sigv4auth", "health_check"]

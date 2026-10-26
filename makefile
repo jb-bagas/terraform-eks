@@ -1,42 +1,65 @@
-# Default environment to dev if not specified
+SHELL := /bin/bash
+
+# Default environment to dev if not specified.
 ENV ?= dev
+TFVARS := vars/$(ENV).tfvars
+BACKEND := backend/$(ENV).tfbackend
 
-.PHONY: init plan apply destroy fmt validate help
+.PHONY: check-env init plan apply destroy fmt fmt-check validate kubeconfig clean bootstrap bootstrap-destroy help
 
-## Initialize the backend and download providers for a specific environment
-init:
-	terraform init -backend-config=backend/$(ENV).tfbackend -reconfigure
+## Verify that the environment-specific files exist.
+check-env:
+	@test -f "$(TFVARS)" || (echo "Missing $(TFVARS). Copy vars/$(ENV).tfvars.example and edit it."; exit 1)
+	@test -f "$(BACKEND)" || (echo "Missing $(BACKEND). Copy backend/$(ENV).tfbackend.example and edit it."; exit 1)
 
-## Generate and show an execution plan
-plan:
-	terraform plan -var-file=vars/$(ENV).tfvars
+## Initialize the backend and download providers for a specific environment.
+init: check-env
+	terraform init -backend-config="$(BACKEND)" -reconfigure -input=false
 
-## Apply the changes to build the infrastructure
-apply:
-	terraform apply -var-file=vars/$(ENV).tfvars
+## Generate and show an execution plan.
+plan: check-env
+	terraform plan -input=false -var-file="$(TFVARS)"
 
-## Destroy the infrastructure for the specified environment
-destroy:
-	terraform destroy -var-file=vars/$(ENV).tfvars
+## Apply the changes to build the infrastructure.
+apply: check-env
+	terraform apply -input=false -var-file="$(TFVARS)"
 
-## Format all Terraform files
+## Destroy the infrastructure for the specified environment.
+destroy: check-env
+	terraform destroy -input=false -var-file="$(TFVARS)"
+
+## Format all Terraform files.
 fmt:
 	terraform fmt -recursive
 
-## Validate the Terraform syntax
+## Fail if any Terraform file is not formatted.
+fmt-check:
+	terraform fmt -check -recursive
+
+## Validate the Terraform syntax (requires init).
 validate:
 	terraform validate
 
-## Show this help message
-help:
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+## Configure kubectl for the current environment.
+kubeconfig:
+	aws eks update-kubeconfig \
+		--name "$$(terraform output -raw cluster_name)" \
+		--region "$$(terraform output -raw aws_region)"
 
-.PHONY: bootstrap
-## Initialize and apply the bootstrap module (creates S3 state bucket)
+## Remove local plan artifacts.
+clean:
+	rm -f "$(ENV).tfplan" tfplan plan.txt
+
+## Initialize and apply the bootstrap module (creates the S3 state bucket).
 bootstrap:
+	@test -f bootstrap/terraform.tfvars || (echo "Missing bootstrap/terraform.tfvars. Copy bootstrap/terraform.tfvars.example and edit it."; exit 1)
 	cd bootstrap && terraform init && terraform apply
 
-.PHONY: bootstrap-destroy
-## Destroy the bootstrap resources (WARNING: deletes state bucket)
+## Destroy the bootstrap resources (WARNING: deletes the state bucket).
 bootstrap-destroy:
+	@echo "WARNING: this deletes the Terraform state bucket."
 	cd bootstrap && terraform destroy
+
+## Show this help message.
+help:
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'

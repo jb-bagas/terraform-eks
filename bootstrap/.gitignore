@@ -1,7 +1,11 @@
-# Local state for bootstrap - NEVER commit this
+# Local state for bootstrap — never commit this.
 terraform.tfstate
-terraform.tfstate.backup
+terraform.tfstate.*
 .terraform/
-.terraform.lock.hcl
+*.tfplan
+crash.log
+crash.*.log
+
+# Real values may contain account-specific names.
 *.tfvars
 !terraform.tfvars.example

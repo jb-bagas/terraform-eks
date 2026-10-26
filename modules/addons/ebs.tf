@@ -10,6 +10,7 @@ resource "helm_release" "ebs_csi" {
   atomic          = true
   cleanup_on_fail = true
   wait            = true
+  timeout         = 900
 
   values = [yamlencode({
     controller = {
@@ -19,16 +20,24 @@ resource "helm_release" "ebs_csi" {
         limits   = { cpu = "200m", memory = "256Mi" }
       }
       tolerations = local.system_tolerations
+      serviceAccount = {
+        create = true
+        name   = "ebs-csi-controller-sa"
+        annotations = {
+          "eks.amazonaws.com/role-arn" = var.ebs_csi_role_arn
+        }
+      }
     }
     node = {
       tolerations = local.system_tolerations
-    }
-    serviceAccount = {
-      create = true
-      name   = "ebs-csi-controller-sa"
-      annotations = {
-        "eks.amazonaws.com/role-arn" = var.ebs_csi_role_arn
+      serviceAccount = {
+        create = true
+        name   = "ebs-csi-node-sa"
       }
+    }
+    # Terraform owns the default StorageClass below.
+    defaultStorageClass = {
+      enabled = false
     }
   })]
 }
