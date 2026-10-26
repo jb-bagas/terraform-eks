@@ -334,8 +334,8 @@ Cost controls to add before a public demo:
 
 The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/portfolio-roadmap.md).
 
-1. **Phase 1 (current):** portfolio narrative, ADRs, limitations, and cost profile.
-2. **Phase 2:** committed EBS smoke-test script and `make smoke-test-ebs`.
+1. **Phase 1 (complete, awaiting review):** portfolio narrative, ADRs, limitations, and cost profile.
+2. **Phase 2 (next):** committed EBS smoke-test script and `make smoke-test-ebs`.
 3. **Phase 3:** `tflint`, `checkov`/`trivy`, `gitleaks`, and `terraform test` gates.
 4. **Phase 4:** CI, cluster, ingress, and observability evidence.
 5. **Phase 5:** production-readiness backlog: multi-account, DR, GitOps, cost, and SLOs.

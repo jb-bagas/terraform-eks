@@ -21,8 +21,8 @@ This roadmap turns the platform into a defensible portfolio project. Work is int
 
 | Phase | Deliverable | Verification gate | Status |
 | --- | --- | --- | --- |
-| 0 | Baseline and publication safety | No tracked secrets; clean fmt/validate/plan; commit strategy agreed | In progress |
-| 1 | Portfolio narrative and ADRs | README, decision records, evidence checklist, limitations and cost sections reviewed | In progress |
+| 0 | Baseline and publication safety | No tracked secrets; clean fmt/validate/plan; commit strategy agreed | In progress — commit strategy pending |
+| 1 | Portfolio narrative and ADRs | README, decision records, evidence checklist, limitations and cost sections reviewed | Ready for review |
 | 2 | Reproducible smoke tests | Script runs against `dev`, verifies PVC I/O, cleans up, leaves no resources | Pending |
 | 3 | Static analysis and CI gates | `tflint`, `checkov`/`trivy`, `gitleaks`, and at least one `terraform test` pass in CI | Pending |
 | 4 | Evidence capture | CI run, cluster, ingress, and observability screenshots captured and linked | Pending |
@@ -61,6 +61,15 @@ Expected: formatting passes, validation passes, plan reports no changes, and the
   - Terraform-managed Helm vs. GitOps
 - Add this roadmap and link it from the README.
 
+### Gate evidence (2026-10-26)
+
+- Four ADRs added under `docs/decisions/`.
+- README now has status, “What this demonstrates”, evidence checklist, incident case study, limitations, cost, and roadmap sections.
+- Relative-link check passed.
+- Secret scan found only the literal scan command in this roadmap, not a credential.
+- `terraform fmt -check`, `terraform validate`, and `terraform plan` remain clean.
+- Phase 2 has **not** started; it waits for review of this phase.
+
 ### Gate
 
 - Every README claim about security, observability, or delivery has a corresponding implementation or documented limitation.
@@ -95,6 +104,10 @@ Expected: PVC binds, the pod writes and reads data, and cleanup removes the name
 - `gitleaks` for secret scanning.
 - At least one `terraform test` suite covering module validation or critical plans.
 - CI jobs that fail fast and upload plan output.
+
+### Baseline findings (2026-10-26)
+
+TFLint 0.60.0 with the bundled Terraform ruleset reports 13 warnings, mostly missing `required_version`/`required_providers` blocks in the local modules. These should be fixed in Phase 3 rather than suppressed. This is the kind of finding the phase gate exists to catch.
 
 ### Gate
 
