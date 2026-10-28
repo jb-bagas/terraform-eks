@@ -15,7 +15,9 @@ This roadmap turns the platform into a defensible portfolio project. Work is int
 - `dev` environment is deployed and `terraform plan` reports **No changes**.
 - EBS CSI `csi-attacher` crash-loop was fixed by upgrading the chart from `2.35.0` to `2.62.0` and verified with a PVC mount/write test.
 - Terraform formatting and validation pass for the root and bootstrap configurations.
-- The repository still contains uncommitted work from the hardening pass.
+- GitHub OIDC provider and `dev`/`prod` roles are created; the `dev` role has an EKS cluster-admin access entry.
+- The bootstrap and root plans are clean after importing/creating the Secrets Store CSI provider and access entry.
+- The follow-up CI/OIDC changes are uncommitted.
 
 ## Phase summary
 
@@ -24,7 +26,7 @@ This roadmap turns the platform into a defensible portfolio project. Work is int
 | 0 | Baseline and publication safety | No tracked secrets; clean fmt/validate/plan; commit strategy agreed | Complete |
 | 1 | Portfolio narrative and ADRs | README, decision records, evidence checklist, limitations and cost sections reviewed | Complete |
 | 2 | Reproducible smoke tests | Script runs against `dev`, verifies PVC I/O, cleans up, leaves no resources | Complete (commit `aaa8c14`) |
-| 3 | Static analysis and CI gates | `tflint`, Trivy, Gitleaks, and `terraform test` pass; plan drift resolved | Complete — commit pending |
+| 3 | Static analysis and CI gates | `tflint`, Trivy, Gitleaks, and `terraform test` pass; plan drift resolved | Complete (commit `14f3b14`; CI env fix pending) |
 | 4 | Evidence capture | CI run, cluster, ingress, and observability screenshots captured and linked | Next |
 | 5 | Production-readiness backlog | Multi-account, DR, GitOps, policy, cost, and SLO gaps documented as a future roadmap | Backlog |
 
@@ -129,7 +131,7 @@ TFLint 0.60.0 with the bundled Terraform ruleset reports 13 warnings, mostly mis
 - CI workflow YAML parses with 16 steps, including TFLint, Gitleaks, Trivy, and `terraform test`.
 - `terraform plan`: **No changes** after reconciling the Secrets Store CSI provider release into state.
 - The Secrets Store CSI AWS provider is running, uses the Terraform-managed IRSA service account, and the CSIDriver exposes both `sts.amazonaws.com` and `pods.eks.amazonaws.com` audiences.
-- The Phase 3 files are still uncommitted.
+- Phase 3 was committed as `14f3b14`.
 
 ### Gate
 
@@ -169,4 +171,4 @@ These are intentionally **not** required for the portfolio MVP, but should be do
 
 ## Next action
 
-Phase 3 is complete and the plan is clean. Commit the Phase 3 files, then approve Phase 4 evidence capture (CI run, cluster, ingress, and observability screenshots).
+Phase 3 is committed and the plan is clean. Commit the follow-up CI environment-scoping fix, rerun the workflow, then approve Phase 4 evidence capture (CI run, cluster, ingress, and observability screenshots).

@@ -110,7 +110,8 @@ See [docs/decisions](docs/decisions/) for the architecture decision records.
 | EBS CSI incident root cause and fix | ✅ Documented below |
 | Secrets Store CSI provider | ✅ Running with `sts.amazonaws.com` and `pods.eks.amazonaws.com` token audiences |
 | Static analysis and Terraform tests | ✅ TFLint 0 warnings, 3 tests, Gitleaks clean, Trivy 0 high/critical (3 documented exceptions) |
-| GitHub Actions plan/apply run | ⏳ Requires a pushed repository and OIDC role |
+| GitHub OIDC provider and roles | ✅ `dev` and `prod` roles created; dev role has EKS admin access |
+| GitHub Actions plan/apply run | ⏳ Pending GitHub environment secrets and a workflow rerun |
 | ALB-hosted demo application screenshot | ⏳ Phase 4 |
 | AMP, X-Ray, or Grafana screenshot | ⏳ Phase 4 |
 | Before/after incident evidence | ⏳ Phase 4 |
@@ -129,7 +130,8 @@ terraform-eks/
 ├── .tflint.hcl              # TFLint configuration
 ├── .trivyignore             # Documented IaC scan exceptions
 ├── makefile                 # init / plan / apply / validate / kubeconfig
-├── bootstrap/               # Creates the versioned, encrypted S3 state bucket
+├── bootstrap/               # State bucket + GitHub OIDC provider/roles
+│   ├── github_oidc.tf
 │   └── terraform.tfvars.example
 ├── scripts/
 │   ├── smoke-test-ebs.sh    # Disposable EBS CSI PVC smoke test
@@ -183,6 +185,14 @@ The bootstrap configuration uses local state by design because the S3 bucket doe
 
 Optional: set `log_bucket_name` in `bootstrap/terraform.tfvars` to create a separate access-log bucket. S3 server access logging cannot target the source bucket.
 
+Optional GitHub OIDC: set `github_repository` and `github_environments` in `bootstrap/terraform.tfvars`. Bootstrap then creates the GitHub OIDC provider and one role per environment. Read the role ARNs with:
+
+```sh
+terraform -chdir=bootstrap output -json github_oidc_role_arns
+```
+
+Put the matching ARN in the GitHub environment secret `AWS_ROLE_ARN`. See [docs/github-oidc.md](docs/github-oidc.md).
+
 ### 2. Configure an environment
 
 ```sh
@@ -194,6 +204,7 @@ Set the real bucket name in `backend/dev.tfbackend`, then review `vars/dev.tfvar
 
 - `cluster_version` must be an EKS-supported version in your region.
 - `admin_role_arn` should be a real IAM role/user ARN. In prod it is required.
+- `additional_admin_role_arns` grants extra admins, such as the GitHub Actions OIDC role, access to the EKS API.
 - `enable_public_endpoint` and `public_access_cidrs` control EKS API exposure.
 - `cluster_endpoint_access_cidrs` adds VPN/Transit Gateway ranges allowed to reach the private endpoint.
 - `secrets_manager_secret_arns` can be narrowed from `["*"]` to your secret ARNs.
@@ -255,7 +266,7 @@ The workflow in [`.github/workflows/terraform.yml`](.github/workflows/terraform.
 - **Push to `main`:** `terraform apply` for `dev`.
 - **Manual dispatch:** choose `dev` or `prod` and `plan` or `apply`. The `prod` GitHub Environment can require reviewers.
 
-Configure the OIDC provider, roles, environment variables, and secrets as described in [docs/github-oidc.md](docs/github-oidc.md).
+The bootstrap layer creates the OIDC provider and environment-scoped roles when `github_repository` is set. The role must also be listed in `additional_admin_role_arns` in `TF_VARS` so Terraform can authenticate to Kubernetes. Configure the GitHub environment variables and secrets as described in [docs/github-oidc.md](docs/github-oidc.md).
 
 > **CI quality gates:** the workflow runs format, TFLint, `terraform test`, Gitleaks, and Trivy before plan/apply. Trivy exceptions are documented in [`.trivyignore`](.trivyignore). Gitleaks requires a free `GITLEAKS_LICENSE` secret for organization-owned repositories; personal repositories do not need one.
 
@@ -390,7 +401,7 @@ The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/p
 
 1. **Phase 1 (complete):** portfolio narrative, ADRs, limitations, and cost profile.
 2. **Phase 2 (complete):** `scripts/smoke-test-ebs.sh` and `make smoke-test-ebs`.
-3. **Phase 3 (complete, commit pending):** `tflint`, Trivy, Gitleaks, and `terraform test` gates.
+3. **Phase 3 (complete, commit `14f3b14`):** `tflint`, Trivy, Gitleaks, and `terraform test` gates. CI environment-scoping fix pending.
 4. **Phase 4:** CI, cluster, ingress, and observability evidence.
 5. **Phase 5:** production-readiness backlog: multi-account, DR, GitOps, cost, and SLOs.
 
@@ -399,6 +410,9 @@ The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/p
 - **`terraform init` cannot find the backend bucket:** run `make bootstrap` first and verify `bucket_name` in `bootstrap/terraform.tfvars`.
 - **`terraform plan` cannot authenticate to Kubernetes:** set `admin_role_arn` to a valid IAM role/user ARN, not an STS assumed-role session ARN. The principal Terraform runs as must be this ARN (or otherwise have cluster admin) so the Helm/Kubernetes providers can authenticate.
 - **Helm releases time out:** check that the EKS endpoint is reachable from where Terraform runs. Prod is private by default.
+- **`configure-aws-credentials` says `Input required and not supplied: aws-region`:** set the `AWS_REGION` environment variable on the GitHub environment (the workflow defaults to `us-east-1`), or set `TF_STATE_BUCKET`/`AWS_ROLE_ARN`/`TF_VARS` if the preflight step names them.
+- **GitHub Actions OIDC returns `AccessDenied`:** verify `AWS_ROLE_ARN` matches the environment role output, the role trust policy pins `repo:<org>/<repo>:environment:<env>`, and the GitHub environment name matches.
+- **GitHub OIDC works but Kubernetes authentication fails:** add the GitHub role ARN to `additional_admin_role_arns` in the environment `TF_VARS` and apply the EKS access entry.
 - **AMG creation fails:** enable IAM Identity Center or change the authentication provider before applying.
 - **Cluster Autoscaler does not scale:** verify the node-group tags and that `cluster_autoscaler_image_tag` (default `v<cluster_version>.0`) matches an image tag for the cluster minor version.
 - **ADOT cannot write to AMP:** confirm the IRSA role is attached to `adot-collector/adot-collector` and the endpoint is HTTPS.

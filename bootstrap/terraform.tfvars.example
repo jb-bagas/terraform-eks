@@ -1,0 +1,14 @@
+# Copy this file to bootstrap/terraform.tfvars and set a globally unique name.
+region       = "us-east-1"
+project_name = "eks-platform"
+bucket_name  = "your-org-eks-platform-tfstate"
+
+# Optional: create a separate bucket for state-bucket access logs.
+# S3 server access logging cannot target the source bucket.
+# log_bucket_name = "your-org-eks-platform-tfstate-logs"
+
+# Optional: create the GitHub Actions OIDC provider and one role per environment.
+# Set this to your repository, then set the resulting role ARN as the
+# AWS_ROLE_ARN secret in the matching GitHub environment.
+# github_repository  = "your-org/terraform-eks"
+# github_environments = ["dev", "prod"]

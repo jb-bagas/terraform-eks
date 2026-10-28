@@ -81,9 +81,10 @@ module "eks" {
   public_access_cidrs    = var.public_access_cidrs
   endpoint_access_cidrs  = var.cluster_endpoint_access_cidrs
 
-  admin_role_arn = local.admin_principal_arn
-  common_tags    = local.common_tags
-  node_groups    = var.node_groups
+  admin_role_arn             = local.admin_principal_arn
+  additional_admin_role_arns = var.additional_admin_role_arns
+  common_tags                = local.common_tags
+  node_groups                = var.node_groups
 }
 
 # ─────────────────────────────────────────────

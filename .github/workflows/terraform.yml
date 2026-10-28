@@ -32,8 +32,6 @@ env:
   TF_IN_AUTOMATION: true
   TF_INPUT: false
   TF_ENV: ${{ github.event.inputs.environment || 'dev' }}
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
 
 jobs:
   terraform:
@@ -41,6 +39,11 @@ jobs:
     runs-on: ${{ vars.TF_RUNNER_LABEL || 'ubuntu-latest' }}
     environment: ${{ github.event.inputs.environment || 'dev' }}
     timeout-minutes: 45
+    env:
+      # Environment-scoped variables are available at job level. The default
+      # keeps the repository's us-east-1 examples working out of the box.
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
 
     steps:
       - name: Checkout
@@ -79,6 +82,29 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
           trivyignores: .trivyignore
+
+      - name: Validate deployment configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          TFVARS: ${{ secrets.TF_VARS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ROLE_ARN}" ]; then
+            echo "::error::Environment secret AWS_ROLE_ARN is not set."
+            exit 1
+          fi
+          if [ -z "${TFVARS}" ]; then
+            echo "::error::Environment secret TF_VARS is not set."
+            exit 1
+          fi
+          if [ -z "${AWS_REGION}" ]; then
+            echo "::error::Environment variable AWS_REGION is empty."
+            exit 1
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Environment variable TF_STATE_BUCKET is not set."
+            exit 1
+          fi
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

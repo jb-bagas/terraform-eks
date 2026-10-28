@@ -149,3 +149,22 @@ variable "admin_role_arn" {
     error_message = "admin_role_arn must be an IAM role or user ARN, or an empty string."
   }
 }
+
+variable "additional_admin_role_arns" {
+  description = "Additional IAM role/user ARNs that receive EKS cluster admin access, for example GitHub Actions roles"
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.additional_admin_role_arns :
+      can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/.+$", arn))
+    ])
+    error_message = "additional_admin_role_arns must contain valid IAM role or user ARNs."
+  }
+
+  validation {
+    condition     = length(distinct(var.additional_admin_role_arns)) == length(var.additional_admin_role_arns)
+    error_message = "additional_admin_role_arns must not contain duplicates."
+  }
+}

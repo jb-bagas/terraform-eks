@@ -2,7 +2,89 @@
 
 The workflow at [`.github/workflows/terraform.yml`](../.github/workflows/terraform.yml) authenticates to AWS with GitHub's OIDC provider. No long-lived AWS access keys are stored in GitHub.
 
-## 1. Create the OIDC provider (once per AWS account)
+## Option A — Terraform-managed OIDC (recommended)
+
+The `bootstrap/` configuration can create the OIDC provider and one role per GitHub environment.
+
+Add the repository and environments to `bootstrap/terraform.tfvars`:
+
+```hcl
+github_repository   = "jb-bagas/terraform-eks"
+github_environments = ["dev", "prod"]
+```
+
+Then apply:
+
+```sh
+make bootstrap
+```
+
+Read the generated role ARNs:
+
+```sh
+terraform -chdir=bootstrap output -json github_oidc_role_arns
+```
+
+The trust policies pin both the repository and the environment:
+
+```text
+repo:jb-bagas/terraform-eks:environment:dev
+repo:jb-bagas/terraform-eks:environment:prod
+```
+
+The bootstrap roles currently attach `PowerUserAccess` and `IAMFullAccess`, which is broad but sufficient for Terraform to create VPC, EKS, IAM, KMS, and observability resources. Replace those attachments with a scoped custom policy or a permissions boundary before using the role in a shared production account.
+
+If you use a fork, change `github_repository` to the fork and re-apply. The GitHub environment must exist in that repository.
+
+Add the role ARN to `additional_admin_role_arns` in the environment's `TF_VARS` too:
+
+```hcl
+additional_admin_role_arns = [
+  "arn:aws:iam::<ACCOUNT_ID>:role/github-actions-eks-platform-dev",
+]
+```
+
+Without this, Terraform can assume the AWS role but cannot authenticate to the EKS Kubernetes API to refresh Helm and Kubernetes resources.
+
+## Configure GitHub environments
+
+Add the following to each GitHub environment:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| Variable | `AWS_REGION` | optional; defaults to `us-east-1` in the workflow |
+| Variable | `TF_STATE_BUCKET` | required; bootstrap state bucket name |
+| Secret | `AWS_ROLE_ARN` | environment-specific OIDC role ARN |
+| Secret | `TF_VARS` | full contents of `vars/<environment>.tfvars` |
+| Secret | `GITLEAKS_LICENSE` | optional; required for organization-owned repositories |
+
+Create the production environment if it does not exist:
+
+```sh
+gh api --method PUT repos/jb-bagas/terraform-eks/environments/prod
+```
+
+Example setup using the GitHub CLI (requires admin access):
+
+```sh
+REPO="jb-bagas/terraform-eks"
+DEV_ROLE="$(terraform -chdir=bootstrap output -json github_oidc_role_arns | jq -r '.dev')"
+
+gh variable set AWS_REGION --env dev --body "us-east-1" -R "$REPO"
+gh variable set TF_STATE_BUCKET --env dev --body "jb-bagas-eks-platform-tfstate-dev" -R "$REPO"
+gh secret set AWS_ROLE_ARN --env dev --body "$DEV_ROLE" -R "$REPO"
+gh secret set TF_VARS --env dev -R "$REPO" < vars/dev.tfvars
+```
+
+The workflow validates `AWS_ROLE_ARN`, `TF_VARS`, `AWS_REGION`, and `TF_STATE_BUCKET` before attempting OIDC authentication, so missing configuration fails with a clear message rather than an empty action input.
+
+Also set a **repository-level** variable `TF_RUNNER_LABEL` to `self-hosted` if the workflow must run on a VPC-connected runner. `runs-on` is evaluated before environment variables are applied, so this cannot be an environment-only variable.
+
+Add required reviewers to the `prod` environment so production applies need manual approval. The same workflow can be triggered manually with **Run workflow** and `environment=prod`, `action=apply`.
+
+## Option B — Manual OIDC setup
+
+### Create the provider once
 
 ```sh
 aws iam create-open-id-connect-provider \
@@ -13,9 +95,9 @@ aws iam create-open-id-connect-provider \
 
 If the provider already exists, skip this step.
 
-## 2. Create one role per GitHub environment
+### Create one role per environment
 
-Use a separate role for `dev` and `prod`. The trust policy must pin the repository and the GitHub environment. Because the workflow sets `environment: dev` or `environment: prod`, GitHub's `sub` claim is:
+Because the workflow sets `environment: dev` or `environment: prod`, GitHub's `sub` claim is:
 
 ```text
 repo:<org>/<repo>:environment:<environment>
@@ -44,35 +126,9 @@ Example trust policy for the `dev` role:
 }
 ```
 
-Repeat with `environment:prod` for the production role.
+Repeat with `environment:prod` for the production role, then attach the permissions needed by Terraform. Scope IAM permissions to the account and, where possible, to resource ARNs, and add a permissions boundary if your organisation requires one.
 
-## 3. Permissions
-
-Terraform creates VPC, EKS, IAM, KMS, CloudWatch, S3, AMP, and Grafana resources. A practical starting point for a dedicated platform account is a scoped custom policy; for a short-lived sandbox, `AdministratorAccess` is sometimes used during bootstrap.
-
-Whichever policy you choose:
-
-- Scope IAM permissions to the account and, where possible, to resource ARNs.
-- Add a permissions boundary if your organisation requires one.
-- Do not attach the role to unrelated repositories.
-- Review with IAM Access Analyzer and `terraform plan` before applying.
-
-## 4. Configure GitHub environments
-
-Create `dev` and `prod` under **Settings → Environments**. Add the following to each environment:
-
-| Type | Name | Value |
-| --- | --- | --- |
-| Variable | `AWS_REGION` | e.g. `us-east-1` |
-| Variable | `TF_STATE_BUCKET` | bootstrap state bucket name |
-| Secret | `AWS_ROLE_ARN` | environment-specific OIDC role ARN |
-| Secret | `TF_VARS` | full contents of `vars/<environment>.tfvars` |
-
-Also set a **repository-level** variable `TF_RUNNER_LABEL` to `self-hosted` if the workflow must run on a VPC-connected runner. `runs-on` is evaluated before environment variables are applied, so this cannot be an environment-only variable.
-
-Add required reviewers to the `prod` environment so production applies need manual approval. The same workflow can be triggered manually with **Run workflow** and `environment=prod`, `action=apply`.
-
-## 5. Private EKS endpoint and runners
+## Private EKS endpoint and runners
 
 Production defaults to a private EKS endpoint. GitHub-hosted runners cannot reach it. Use one of:
 
@@ -87,6 +143,9 @@ environment     = "prod"
 aws_region      = "us-east-1"
 cluster_version = "1.36"
 admin_role_arn  = "arn:aws:iam::123456789012:role/GitHubTerraform-Prod"
+additional_admin_role_arns = [
+  "arn:aws:iam::123456789012:role/github-actions-eks-platform-prod",
+]
 vpc_cidr        = "10.1.0.0/16"
 availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
 enable_public_endpoint = false

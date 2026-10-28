@@ -17,6 +17,9 @@ availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
 # Required in prod. Use the role that Terraform/CI and cluster operators assume.
 admin_role_arn = "arn:aws:iam::123456789012:role/Prod-Admin" # Replace with a real ARN.
 
+# Optional: additional cluster admins, such as the GitHub Actions OIDC role.
+# additional_admin_role_arns = ["arn:aws:iam::123456789012:role/github-actions-eks-platform-dev"]
+
 # Keep the API private. CI must run from a VPC-connected runner.
 enable_public_endpoint = false
 public_access_cidrs    = []

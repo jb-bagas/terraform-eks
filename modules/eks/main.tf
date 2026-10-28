@@ -338,6 +338,28 @@ resource "aws_eks_access_policy_association" "admin" {
   depends_on = [aws_eks_access_entry.admin]
 }
 
+resource "aws_eks_access_entry" "additional_admin" {
+  for_each = toset(var.additional_admin_role_arns)
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = each.value
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "additional_admin" {
+  for_each = toset(var.additional_admin_role_arns)
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = each.value
+  policy_arn    = "arn:${local.partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.additional_admin]
+}
+
 # ─────────────────────────────────────────────
 # 8. OIDC PROVIDER (Required for IRSA)
 # ─────────────────────────────────────────────

@@ -82,6 +82,25 @@ variable "admin_role_arn" {
   }
 }
 
+variable "additional_admin_role_arns" {
+  description = "Additional IAM role/user ARNs granted EKS cluster admin access, such as the GitHub Actions role"
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.additional_admin_role_arns :
+      can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/.+$", arn))
+    ])
+    error_message = "additional_admin_role_arns must contain valid IAM role or user ARNs."
+  }
+
+  validation {
+    condition     = length(distinct(var.additional_admin_role_arns)) == length(var.additional_admin_role_arns)
+    error_message = "additional_admin_role_arns must not contain duplicates."
+  }
+}
+
 variable "enable_public_endpoint" {
   description = "Whether the EKS public API endpoint is enabled. Defaults to true for non-prod and false for prod. Set false when using a VPC runner / private access."
   type        = bool

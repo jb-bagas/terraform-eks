@@ -18,6 +18,9 @@ availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
 # Use an IAM role/user ARN (not an STS assumed-role ARN).
 admin_role_arn = ""
 
+# Optional: additional cluster admins, such as the GitHub Actions OIDC role.
+# additional_admin_role_arns = ["arn:aws:iam::123456789012:role/github-actions-eks-platform-dev"]
+
 # Restrict this before using a shared account.
 enable_public_endpoint = true
 public_access_cidrs    = ["0.0.0.0/0"]
