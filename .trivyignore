@@ -1,0 +1,15 @@
+# Trivy misconfiguration exceptions.
+#
+# AWS-0104: The EKS control-plane security group needs unrestricted egress to
+# reach AWS service endpoints and the public EKS API. Restricting it fully
+# requires VPC endpoints and a deliberate private-egress design.
+AWS-0104
+
+# AWS-0132: The Terraform state bucket uses SSE-S3 by design. A customer-managed
+# KMS key would add bootstrap key-management and per-request costs; the bucket
+# is private, versioned, TLS-only, and public-access-blocked.
+AWS-0132
+
+# AWS-0164: Public subnets intentionally allow public IP assignment for the
+# internet-facing load balancer tier. Worker nodes run only in private subnets.
+AWS-0164

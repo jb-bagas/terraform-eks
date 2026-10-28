@@ -25,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ github.event.pull_request.number || github.ref }}
+  group: terraform-${{ github.event.inputs.environment || 'dev' }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -44,13 +44,41 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.5
           terraform_wrapper: false
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v6.3.2
+        with:
+          tflint_version: v0.60.0
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Secret scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: false
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+
+      - name: IaC scan (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          trivyignores: .trivyignore
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -89,14 +117,17 @@ jobs:
           printf '%s\n' "${TFVARS}" > "vars/${TF_ENV}.tfvars"
           chmod 600 "vars/${TF_ENV}.tfvars"
 
-      - name: Terraform format check
-        run: terraform fmt -check -recursive
-
       - name: Terraform init
         run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
 
       - name: Terraform validate
         run: terraform validate -no-color
+
+      - name: TFLint
+        run: tflint --recursive --config="${GITHUB_WORKSPACE}/.tflint.hcl" --format=compact
+
+      - name: Terraform test
+        run: terraform test -no-color
 
       - name: Terraform plan
         if: >-

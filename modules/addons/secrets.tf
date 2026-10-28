@@ -32,7 +32,8 @@ resource "helm_release" "secrets_csi" {
     }
 
     tokenRequests = [
-      { audience = "sts.amazonaws.com" }
+      { audience = "sts.amazonaws.com" },
+      { audience = "pods.eks.amazonaws.com" },
     ]
   })]
 }

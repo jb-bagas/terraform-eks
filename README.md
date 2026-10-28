@@ -103,10 +103,13 @@ See [docs/decisions](docs/decisions/) for the architecture decision records.
 | Evidence | Status |
 | --- | --- |
 | Architecture diagram, trust boundaries, and ADRs | ✅ In repository |
-| Terraform `fmt`, `validate`, and clean `plan` | ✅ Verified |
+| Terraform `fmt` and `validate` | ✅ Verified |
+| Terraform `plan` clean | ✅ No changes |
 | Live EKS cluster and healthy EBS CSI controller | ✅ Verified in `dev` |
 | PVC bind, mount, write, and cleanup test | ✅ Reproducible via [scripts/smoke-test-ebs.sh](scripts/smoke-test-ebs.sh) |
 | EBS CSI incident root cause and fix | ✅ Documented below |
+| Secrets Store CSI provider | ✅ Running with `sts.amazonaws.com` and `pods.eks.amazonaws.com` token audiences |
+| Static analysis and Terraform tests | ✅ TFLint 0 warnings, 3 tests, Gitleaks clean, Trivy 0 high/critical (3 documented exceptions) |
 | GitHub Actions plan/apply run | ⏳ Requires a pushed repository and OIDC role |
 | ALB-hosted demo application screenshot | ⏳ Phase 4 |
 | AMP, X-Ray, or Grafana screenshot | ⏳ Phase 4 |
@@ -123,11 +126,16 @@ terraform-eks/
 ├── outputs.tf               # Cluster, networking, KMS, and observability outputs
 ├── providers.tf             # AWS, Kubernetes, and Helm providers
 ├── versions.tf              # Terraform/provider constraints + S3 backend
+├── .tflint.hcl              # TFLint configuration
+├── .trivyignore             # Documented IaC scan exceptions
 ├── makefile                 # init / plan / apply / validate / kubeconfig
 ├── bootstrap/               # Creates the versioned, encrypted S3 state bucket
 │   └── terraform.tfvars.example
 ├── scripts/
-│   └── smoke-test-ebs.sh    # Disposable EBS CSI PVC smoke test
+│   ├── smoke-test-ebs.sh    # Disposable EBS CSI PVC smoke test
+│   └── check-no-secrets.sh  # Local Gitleaks/grep secret scan
+├── tests/
+│   └── vpc.tftest.hcl       # Terraform tests + negative validation cases
 ├── k8s-manifests/           # Example app, ingress, SecretProviderClass, PDB
 ├── docs/
 │   ├── architecture.md
@@ -249,9 +257,35 @@ The workflow in [`.github/workflows/terraform.yml`](.github/workflows/terraform.
 
 Configure the OIDC provider, roles, environment variables, and secrets as described in [docs/github-oidc.md](docs/github-oidc.md).
 
-> **Current CI scope:** the workflow covers format, validate, plan, and apply. Static analysis, secret scanning, and `terraform test` are planned for [Phase 3](docs/portfolio-roadmap.md#phase-3--static-analysis-and-ci-gates) and are not yet merge-blocking.
+> **CI quality gates:** the workflow runs format, TFLint, `terraform test`, Gitleaks, and Trivy before plan/apply. Trivy exceptions are documented in [`.trivyignore`](.trivyignore). Gitleaks requires a free `GITLEAKS_LICENSE` secret for organization-owned repositories; personal repositories do not need one.
 
 > **Private endpoint note:** production uses a private EKS endpoint. GitHub-hosted runners cannot reach it. Use a self-hosted runner in the VPC and set the repository-level `TF_RUNNER_LABEL` variable to its label, or temporarily restrict `public_access_cidrs` to a known egress range.
+
+## ✅ Quality gates
+
+Run the local gates after `make init ENV=dev`:
+
+```sh
+make fmt-check
+make validate
+make lint
+make test
+make secrets-check   # uses Gitleaks if installed, otherwise a grep fallback
+make scan            # requires Trivy on PATH
+```
+
+| Gate | What it checks |
+| --- | --- |
+| `terraform fmt -check` | HCL formatting |
+| `terraform validate` | Provider/module schema and references |
+| `tflint` | Terraform rules and module version/provider constraints |
+| `terraform test` | Valid VPC plan and negative AZ/CIDR validation cases with mock providers |
+| `gitleaks` | Secrets in the working tree and git history |
+| `trivy config` | IaC misconfigurations at HIGH/CRITICAL severity |
+
+The three Trivy exceptions are intentional and documented in [`.trivyignore`](.trivyignore): EKS control-plane egress, SSE-S3 on the state bucket, and public IP assignment on the intentionally public ALB/NAT subnet tier.
+
+The Secrets Store CSI `CSIDriver` is configured with both `sts.amazonaws.com` and `pods.eks.amazonaws.com` token audiences; the AWS provider logs an explicit warning when the second audience is missing.
 
 ## 📈 Observability
 
@@ -327,7 +361,7 @@ This is a portfolio reference implementation, not a finished production platform
 - **Prod is not deployed:** the production variables, private endpoint, and VPC-runner path are documented and planned but not verified end-to-end.
 - **No disaster recovery:** there is no cross-region state replication, cluster restore procedure, or persistent-data backup runbook.
 - **No GitOps:** Helm releases are applied by Terraform. Argo CD/Flux would provide continuous reconciliation and cleaner promotion.
-- **No policy-as-code or security scanning in CI yet:** `tflint`, `checkov`/`trivy`, `gitleaks`, and `terraform test` are Phase 3.
+- **No OPA/admission policy-as-code yet:** TFLint, Trivy, Gitleaks, and `terraform test` are present, but Kubernetes admission policy and OPA/Conftest are not.
 - **Observability is not fully evidenced:** the AMP/AMG/ADOT path is plan-tested; the current `dev` variables have observability disabled, and AMG requires IAM Identity Center.
 - **No cost guardrails:** no AWS Budgets, alerts, or Infracost check is committed.
 - **No SLOs or runbooks:** alert routing, error budgets, and on-call procedures are out of scope for the MVP.
@@ -355,8 +389,8 @@ Cost controls to add before a public demo:
 The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/portfolio-roadmap.md).
 
 1. **Phase 1 (complete):** portfolio narrative, ADRs, limitations, and cost profile.
-2. **Phase 2 (complete, commit pending):** `scripts/smoke-test-ebs.sh` and `make smoke-test-ebs`.
-3. **Phase 3 (next):** `tflint`, `checkov`/`trivy`, `gitleaks`, and `terraform test` gates.
+2. **Phase 2 (complete):** `scripts/smoke-test-ebs.sh` and `make smoke-test-ebs`.
+3. **Phase 3 (complete, commit pending):** `tflint`, Trivy, Gitleaks, and `terraform test` gates.
 4. **Phase 4:** CI, cluster, ingress, and observability evidence.
 5. **Phase 5:** production-readiness backlog: multi-account, DR, GitOps, cost, and SLOs.
 

@@ -5,7 +5,7 @@ ENV ?= dev
 TFVARS := vars/$(ENV).tfvars
 BACKEND := backend/$(ENV).tfbackend
 
-.PHONY: check-env init plan apply destroy fmt fmt-check validate kubeconfig clean smoke-test-ebs bootstrap bootstrap-destroy help
+.PHONY: check-env init plan apply destroy fmt fmt-check validate lint test secrets-check scan kubeconfig clean smoke-test-ebs bootstrap bootstrap-destroy help
 
 ## Verify that the environment-specific files exist.
 check-env:
@@ -39,6 +39,22 @@ fmt-check:
 ## Validate the Terraform syntax (requires init).
 validate:
 	terraform validate
+
+## Run TFLint across the root and local modules.
+lint:
+	tflint --recursive --config="$$(pwd)/.tflint.hcl"
+
+## Run the Terraform test suite (mocked providers, no AWS resources).
+test:
+	terraform test -no-color
+
+## Run Gitleaks if available, otherwise a local secret-scan fallback.
+secrets-check:
+	./scripts/check-no-secrets.sh
+
+## Run the Trivy IaC scan (requires trivy on PATH).
+scan:
+	trivy config --severity CRITICAL,HIGH --ignorefile .trivyignore --exit-code 1 --format table .
 
 ## Configure kubectl for the current environment.
 kubeconfig:

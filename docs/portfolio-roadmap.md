@@ -23,9 +23,9 @@ This roadmap turns the platform into a defensible portfolio project. Work is int
 | --- | --- | --- | --- |
 | 0 | Baseline and publication safety | No tracked secrets; clean fmt/validate/plan; commit strategy agreed | Complete |
 | 1 | Portfolio narrative and ADRs | README, decision records, evidence checklist, limitations and cost sections reviewed | Complete |
-| 2 | Reproducible smoke tests | Script runs against `dev`, verifies PVC I/O, cleans up, leaves no resources | Complete — commit pending |
-| 3 | Static analysis and CI gates | `tflint`, `checkov`/`trivy`, `gitleaks`, and at least one `terraform test` pass in CI | Next |
-| 4 | Evidence capture | CI run, cluster, ingress, and observability screenshots captured and linked | Pending |
+| 2 | Reproducible smoke tests | Script runs against `dev`, verifies PVC I/O, cleans up, leaves no resources | Complete (commit `aaa8c14`) |
+| 3 | Static analysis and CI gates | `tflint`, Trivy, Gitleaks, and `terraform test` pass; plan drift resolved | Complete — commit pending |
+| 4 | Evidence capture | CI run, cluster, ingress, and observability screenshots captured and linked | Next |
 | 5 | Production-readiness backlog | Multi-account, DR, GitOps, policy, cost, and SLO gaps documented as a future roadmap | Backlog |
 
 ## Phase 0 — Baseline and publication safety
@@ -68,7 +68,7 @@ Expected: formatting passes, validation passes, plan reports no changes, and the
 - Relative-link check passed.
 - Secret scan found only the literal scan command in this roadmap, not a credential.
 - `terraform fmt -check`, `terraform validate`, and `terraform plan` remain clean.
-- Phase 2 has **not** started; it waits for review of this phase.
+- Phase 1 was committed before Phase 2 began.
 
 ### Gate
 
@@ -103,7 +103,7 @@ Expected: PVC binds, the pod writes and reads data, and cleanup removes the name
 - `bash -n scripts/smoke-test-ebs.sh` passes.
 - `KEEP_SMOKE_TEST=1` leaves the namespace intentionally for evidence capture.
 - No Terraform state or AWS infrastructure changes were made by the test.
-- The Phase 2 files are still uncommitted; commit them before closing the phase.
+- Phase 2 was committed as `aaa8c14`.
 
 ## Phase 3 — Static analysis and CI gates
 
@@ -117,7 +117,19 @@ Expected: PVC binds, the pod writes and reads data, and cleanup removes the name
 
 ### Baseline findings (2026-10-26)
 
-TFLint 0.60.0 with the bundled Terraform ruleset reports 13 warnings, mostly missing `required_version`/`required_providers` blocks in the local modules. These should be fixed in Phase 3 rather than suppressed. This is the kind of finding the phase gate exists to catch.
+TFLint 0.60.0 with the bundled Terraform ruleset reports 13 warnings, mostly missing `required_version`/`required_providers` blocks in the local modules. These were fixed in Phase 3 rather than suppressed; the gate caught them before they became CI noise.
+
+### Gate evidence (2026-10-28)
+
+- TFLint: **0 warnings** after adding `required_version` and `required_providers` to all local modules.
+- Terraform tests: **3 passed** — valid VPC plan, single-AZ rejection, and too-small-CIDR rejection.
+- Gitleaks: **no leaks** across 19 commits.
+- Trivy: **0 HIGH/CRITICAL findings** after three documented exceptions in `.trivyignore`.
+- `terraform fmt -check` and `terraform validate`: pass.
+- CI workflow YAML parses with 16 steps, including TFLint, Gitleaks, Trivy, and `terraform test`.
+- `terraform plan`: **No changes** after reconciling the Secrets Store CSI provider release into state.
+- The Secrets Store CSI AWS provider is running, uses the Terraform-managed IRSA service account, and the CSIDriver exposes both `sts.amazonaws.com` and `pods.eks.amazonaws.com` audiences.
+- The Phase 3 files are still uncommitted.
 
 ### Gate
 
@@ -157,4 +169,4 @@ These are intentionally **not** required for the portfolio MVP, but should be do
 
 ## Next action
 
-Phase 2 is code-complete but uncommitted. Review the smoke-test script, commit the Phase 2 changes, then approve Phase 3 (static analysis and CI gates) separately.
+Phase 3 is complete and the plan is clean. Commit the Phase 3 files, then approve Phase 4 evidence capture (CI run, cluster, ingress, and observability screenshots).
