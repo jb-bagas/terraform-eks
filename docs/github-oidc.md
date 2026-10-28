@@ -117,14 +117,27 @@ Example trust policy for the `dev` role:
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:<org>/<repo>:environment:dev"
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": [
+            "repo:<org>/<repo>:environment:dev",
+            "repo:<owner>@*/<repo>@*:environment:dev"
+          ]
         }
       }
     }
   ]
 }
 ```
+
+GitHub now emits immutable owner/repository IDs in the OIDC subject, for example:
+
+```text
+repo:jb-bagas@339110344/terraform-eks@1408696656:environment:dev
+```
+
+The `StringLike` form with `@*/` and `@*:` accepts both the immutable form and the legacy owner/repo form. A trust policy that only uses `StringEquals` on the legacy subject will fail with `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
 
 Repeat with `environment:prod` for the production role, then attach the permissions needed by Terraform. Scope IAM permissions to the account and, where possible, to resource ARNs, and add a permissions boundary if your organisation requires one.
 

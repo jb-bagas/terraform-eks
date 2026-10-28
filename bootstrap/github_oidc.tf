@@ -10,6 +10,8 @@
 locals {
   github_oidc_enabled = var.github_repository != ""
   github_oidc_repos   = local.github_oidc_enabled ? toset(var.github_environments) : toset([])
+  github_owner        = local.github_oidc_enabled ? split("/", var.github_repository)[0] : ""
+  github_repo_name    = local.github_oidc_enabled ? split("/", var.github_repository)[1] : ""
 }
 
 data "aws_partition" "current" {}
@@ -51,7 +53,14 @@ resource "aws_iam_role" "github_actions" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${each.key}"
+        }
+        # GitHub emits immutable owner/repository IDs in newer subjects, for
+        # example repo:owner@123/repo@456:environment:dev. Accept both forms.
+        StringLike = {
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:${var.github_repository}:environment:${each.key}",
+            "repo:${local.github_owner}@*/${local.github_repo_name}@*:environment:${each.key}",
+          ]
         }
       }
     }]
