@@ -5,7 +5,7 @@ ENV ?= dev
 TFVARS := vars/$(ENV).tfvars
 BACKEND := backend/$(ENV).tfbackend
 
-.PHONY: check-env init plan apply destroy fmt fmt-check validate kubeconfig clean bootstrap bootstrap-destroy help
+.PHONY: check-env init plan apply destroy fmt fmt-check validate kubeconfig clean smoke-test-ebs bootstrap bootstrap-destroy help
 
 ## Verify that the environment-specific files exist.
 check-env:
@@ -50,6 +50,10 @@ kubeconfig:
 clean:
 	rm -f "$(ENV).tfplan" tfplan plan.txt
 
+## Run a disposable EBS CSI volume smoke test against the current cluster.
+smoke-test-ebs:
+	./scripts/smoke-test-ebs.sh
+
 ## Initialize and apply the bootstrap module (creates the S3 state bucket).
 bootstrap:
 	@test -f bootstrap/terraform.tfvars || (echo "Missing bootstrap/terraform.tfvars. Copy bootstrap/terraform.tfvars.example and edit it."; exit 1)
@@ -62,4 +66,4 @@ bootstrap-destroy:
 
 ## Show this help message.
 help:
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@awk 'BEGIN { FS = ":" } /^## / { desc = substr($$0, 4); next } /^[a-zA-Z0-9_-]+:/ { if (desc != "") { printf "\033[36m%-20s\033[0m %s\n", $$1, desc; desc = "" } }' $(MAKEFILE_LIST) | sort

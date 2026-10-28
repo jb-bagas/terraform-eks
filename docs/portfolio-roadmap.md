@@ -21,10 +21,10 @@ This roadmap turns the platform into a defensible portfolio project. Work is int
 
 | Phase | Deliverable | Verification gate | Status |
 | --- | --- | --- | --- |
-| 0 | Baseline and publication safety | No tracked secrets; clean fmt/validate/plan; commit strategy agreed | In progress — commit strategy pending |
-| 1 | Portfolio narrative and ADRs | README, decision records, evidence checklist, limitations and cost sections reviewed | Ready for review |
-| 2 | Reproducible smoke tests | Script runs against `dev`, verifies PVC I/O, cleans up, leaves no resources | Pending |
-| 3 | Static analysis and CI gates | `tflint`, `checkov`/`trivy`, `gitleaks`, and at least one `terraform test` pass in CI | Pending |
+| 0 | Baseline and publication safety | No tracked secrets; clean fmt/validate/plan; commit strategy agreed | Complete |
+| 1 | Portfolio narrative and ADRs | README, decision records, evidence checklist, limitations and cost sections reviewed | Complete |
+| 2 | Reproducible smoke tests | Script runs against `dev`, verifies PVC I/O, cleans up, leaves no resources | Complete — commit pending |
+| 3 | Static analysis and CI gates | `tflint`, `checkov`/`trivy`, `gitleaks`, and at least one `terraform test` pass in CI | Next |
 | 4 | Evidence capture | CI run, cluster, ingress, and observability screenshots captured and linked | Pending |
 | 5 | Production-readiness backlog | Multi-account, DR, GitOps, policy, cost, and SLO gaps documented as a future roadmap | Backlog |
 
@@ -95,6 +95,16 @@ kubectl get pvc -A | grep ebs-smoke || true
 
 Expected: PVC binds, the pod writes and reads data, and cleanup removes the namespace, PVC, and volume.
 
+### Gate evidence (2026-10-26)
+
+- `make smoke-test-ebs` passed against the `dev` cluster.
+- PVC bound to a 1 GiB `gp3` volume, the pod mounted it, and the write/read assertion passed.
+- Cleanup removed the namespace, PVC, and PV; no `ebs-smoke` resources remain.
+- `bash -n scripts/smoke-test-ebs.sh` passes.
+- `KEEP_SMOKE_TEST=1` leaves the namespace intentionally for evidence capture.
+- No Terraform state or AWS infrastructure changes were made by the test.
+- The Phase 2 files are still uncommitted; commit them before closing the phase.
+
 ## Phase 3 — Static analysis and CI gates
 
 ### Deliverables
@@ -147,4 +157,4 @@ These are intentionally **not** required for the portfolio MVP, but should be do
 
 ## Next action
 
-Complete the Phase 1 gate, review the narrative and ADRs, then approve Phase 2 (smoke tests) separately.
+Phase 2 is code-complete but uncommitted. Review the smoke-test script, commit the Phase 2 changes, then approve Phase 3 (static analysis and CI gates) separately.

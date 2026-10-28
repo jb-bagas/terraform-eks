@@ -105,7 +105,7 @@ See [docs/decisions](docs/decisions/) for the architecture decision records.
 | Architecture diagram, trust boundaries, and ADRs | ✅ In repository |
 | Terraform `fmt`, `validate`, and clean `plan` | ✅ Verified |
 | Live EKS cluster and healthy EBS CSI controller | ✅ Verified in `dev` |
-| PVC bind, mount, write, and cleanup test | ✅ Verified manually |
+| PVC bind, mount, write, and cleanup test | ✅ Reproducible via [scripts/smoke-test-ebs.sh](scripts/smoke-test-ebs.sh) |
 | EBS CSI incident root cause and fix | ✅ Documented below |
 | GitHub Actions plan/apply run | ⏳ Requires a pushed repository and OIDC role |
 | ALB-hosted demo application screenshot | ⏳ Phase 4 |
@@ -126,6 +126,8 @@ terraform-eks/
 ├── makefile                 # init / plan / apply / validate / kubeconfig
 ├── bootstrap/               # Creates the versioned, encrypted S3 state bucket
 │   └── terraform.tfvars.example
+├── scripts/
+│   └── smoke-test-ebs.sh    # Disposable EBS CSI PVC smoke test
 ├── k8s-manifests/           # Example app, ingress, SecretProviderClass, PDB
 ├── docs/
 │   ├── architecture.md
@@ -218,6 +220,24 @@ make kubeconfig ENV=dev
 kubectl get nodes
 kubectl get pods -A
 ```
+
+### 5. Smoke-test persistent storage
+
+```sh
+make smoke-test-ebs
+```
+
+This creates a temporary namespace, a 1 GiB `gp3` PVC, and a BusyBox pod; waits for the PVC to bind and the pod to become ready; writes and reads data through the mounted volume; then deletes the namespace and waits for the EBS volume finalizer to finish.
+
+To keep the namespace for screenshots or debugging:
+
+```sh
+KEEP_SMOKE_TEST=1 make smoke-test-ebs
+kubectl -n <namespace> get pvc,pod
+kubectl delete namespace <namespace>
+```
+
+The script is in [`scripts/smoke-test-ebs.sh`](scripts/smoke-test-ebs.sh) and does not change Terraform state.
 
 ## 🔁 CI/CD
 
@@ -334,9 +354,9 @@ Cost controls to add before a public demo:
 
 The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/portfolio-roadmap.md).
 
-1. **Phase 1 (complete, awaiting review):** portfolio narrative, ADRs, limitations, and cost profile.
-2. **Phase 2 (next):** committed EBS smoke-test script and `make smoke-test-ebs`.
-3. **Phase 3:** `tflint`, `checkov`/`trivy`, `gitleaks`, and `terraform test` gates.
+1. **Phase 1 (complete):** portfolio narrative, ADRs, limitations, and cost profile.
+2. **Phase 2 (complete, commit pending):** `scripts/smoke-test-ebs.sh` and `make smoke-test-ebs`.
+3. **Phase 3 (next):** `tflint`, `checkov`/`trivy`, `gitleaks`, and `terraform test` gates.
 4. **Phase 4:** CI, cluster, ingress, and observability evidence.
 5. **Phase 5:** production-readiness backlog: multi-account, DR, GitOps, cost, and SLOs.
 
