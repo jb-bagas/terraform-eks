@@ -78,6 +78,14 @@ gh secret set TF_VARS --env dev -R "$REPO" < vars/dev.tfvars
 
 The workflow validates `AWS_ROLE_ARN`, `TF_VARS`, `AWS_REGION`, and `TF_STATE_BUCKET` before attempting OIDC authentication, so missing configuration fails with a clear message rather than an empty action input.
 
+`TF_VARS` must contain the **HCL file contents**, not the path `vars/dev.tfvars`. Set it with:
+
+```sh
+gh secret set TF_VARS --env dev -R jb-bagas/terraform-eks < vars/dev.tfvars
+```
+
+The workflow parses and formats the generated file before `terraform init`; a path or escaped string fails at that step with a specific error.
+
 Also set a **repository-level** variable `TF_RUNNER_LABEL` to `self-hosted` if the workflow must run on a VPC-connected runner. `runs-on` is evaluated before environment variables are applied, so this cannot be an environment-only variable.
 
 Add required reviewers to the `prod` environment so production applies need manual approval. The same workflow can be triggered manually with **Run workflow** and `environment=prod`, `action=apply`.
@@ -138,6 +146,8 @@ repo:jb-bagas@339110344/terraform-eks@1408696656:environment:dev
 ```
 
 The `StringLike` form with `@*/` and `@*:` accepts both the immutable form and the legacy owner/repo form. A trust policy that only uses `StringEquals` on the legacy subject will fail with `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
+
+OIDC providers and roles are per AWS account. If a sandbox resets or you switch accounts, re-run bootstrap in the new account and replace the GitHub `AWS_ROLE_ARN` and `TF_VARS` values. A stale role ARN from the old account, or stale provider thumbprints, produces `The web identity token provided could not be validated`.
 
 Repeat with `environment:prod` for the production role, then attach the permissions needed by Terraform. Scope IAM permissions to the account and, where possible, to resource ARNs, and add a permissions boundary if your organisation requires one.
 

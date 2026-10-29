@@ -26,11 +26,15 @@ resource "aws_iam_openid_connect_provider" "github" {
 
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
-  thumbprint_list = [
-    data.tls_certificate.github[0].certificates[0].sha1_fingerprint,
-    # GitHub's long-standing public OIDC thumbprint, kept as a rotation fallback.
-    "6938fd4d98bab03faadb97b34396831e3780aea1",
-  ]
+  # AWS accepts up to five thumbprints. Include the complete current chain
+  # plus the long-standing GitHub thumbprint and the ISRG Root X1 fallback.
+  thumbprint_list = distinct(concat(
+    [for cert in data.tls_certificate.github[0].certificates : cert.sha1_fingerprint],
+    [
+      "6938fd4d98bab03faadb97b34396831e3780aea1",
+      "cabd2a79a1076a31f21d253635cb039d4329a5e8",
+    ],
+  ))
 
   tags = {
     Project   = var.project_name

@@ -143,6 +143,14 @@ jobs:
           printf '%s\n' "${TFVARS}" > "vars/${TF_ENV}.tfvars"
           chmod 600 "vars/${TF_ENV}.tfvars"
 
+      - name: Validate generated tfvars
+        run: |
+          set -euo pipefail
+          if ! terraform fmt "vars/${TF_ENV}.tfvars" >/dev/null; then
+            echo "::error::TF_VARS is not valid HCL. Set the secret to the full contents of vars/${TF_ENV}.tfvars, not a file path or escaped string."
+            exit 1
+          fi
+
       - name: Terraform init
         run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
 
