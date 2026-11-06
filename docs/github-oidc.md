@@ -36,6 +36,8 @@ The bootstrap roles currently attach `PowerUserAccess` and `IAMFullAccess`, whic
 
 If you use a fork, change `github_repository` to the fork and re-apply. The GitHub environment must exist in that repository.
 
+The `AWS_ROLE_ARN` value must be the full IAM role ARN, not the short role name or a URL. If GitHub shows `Could not assume role with OIDC: Request ARN is invalid`, the secret is empty, contains whitespace, or is not in the `arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>` format.
+
 Add the role ARN to `additional_admin_role_arns` in the environment's `TF_VARS` too:
 
 ```hcl
