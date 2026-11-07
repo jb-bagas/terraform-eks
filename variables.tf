@@ -219,3 +219,9 @@ variable "enable_observability" {
   type        = bool
   default     = true
 }
+
+variable "admin_role_arn" {
+  description = "IAM role/user ARN for cluster admin access. Injected via TF_VAR_admin_role_arn."
+  type        = string
+  default     = ""
+}
