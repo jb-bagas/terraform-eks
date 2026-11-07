@@ -179,6 +179,58 @@ jobs:
           use_lockfile = true
           EOF
 
+      - name: Validate deployment configuration
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          TFVARS: ${{ secrets.TF_VARS }}
+        run: |
+          set -euo pipefail
+
+          ROLE_ARN="$(printf '%s' "${ROLE_ARN}" | tr -d '\r\n' | xargs)"
+          export ROLE_ARN
+
+          if [ -z "${ROLE_ARN}" ]; then
+            echo "::error::Environment secret AWS_ROLE_ARN is not set."
+            exit 1
+          fi
+          if ! printf '%s' "${ROLE_ARN}" | grep -Eq '^arn:aws([a-zA-Z-]+)?:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$'; then
+            echo "::error::Environment secret AWS_ROLE_ARN is not a valid IAM role ARN (expected arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>)."
+            exit 1
+          fi
+          if [ -z "${TFVARS}" ]; then
+            echo "::error::Environment secret TF_VARS is not set."
+            exit 1
+          fi
+          if [ -z "${AWS_REGION}" ]; then
+            echo "::error::Environment variable AWS_REGION is empty."
+            exit 1
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Environment variable TF_STATE_BUCKET is not set."
+            exit 1
+          fi
+
+      - name: Write environment tfvars from secret
+        env:
+          TFVARS: ${{ secrets.TF_VARS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TFVARS}" ]; then
+            echo "::error::Environment secret TF_VARS is not set."
+            exit 1
+          fi
+          mkdir -p vars
+          printf '%s\n' "${TFVARS}" > "vars/${TF_ENV}.tfvars"
+          chmod 600 "vars/${TF_ENV}.tfvars"
+
+      - name: Validate generated tfvars
+        run: |
+          set -euo pipefail
+          if ! terraform fmt "vars/${TF_ENV}.tfvars" >/dev/null; then
+            echo "::error::TF_VARS is not valid HCL. Set the secret to the full contents of vars/${TF_ENV}.tfvars, not a file path or escaped string."
+            exit 1
+          fi
+
       - name: Terraform init
         run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
 
