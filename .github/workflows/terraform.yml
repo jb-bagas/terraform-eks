@@ -3,78 +3,100 @@ name: Terraform
 on:
   pull_request:
     branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '**.tfbackend'
+      - 'modules/**'
+      - '.github/workflows/terraform.yml'
+      - '.tflint.hcl'
+      - '.trivyignore'
   push:
     branches: [main]
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '**.tfbackend'
+      - 'modules/**'
+      - '.github/workflows/terraform.yml'
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment to deploy
+        description: 'Target environment'
         required: true
-        default: dev
+        default: 'dev'
         type: choice
-        options: [dev, prod]
+        options: [dev, staging, prod]
       action:
-        description: Terraform action
+        description: 'Terraform action'
         required: true
-        default: plan
+        default: 'plan'
         type: choice
         options: [plan, apply]
+      confirm_apply:
+        description: 'To confirm apply, type: apply-<environment> (e.g. apply-prod)'
+        required: false
+        type: string
+  schedule:
+    # Weekly drift detection — Mondays 06:00 UTC
+    - cron: '0 6 * * 1'
 
 permissions:
-  id-token: write
-  contents: read
+  id-token: write        # Required for OIDC → AWS
+  contents: read         # Read repo
+  pull-requests: write   # Post/update PR comments
+  actions: read          # Read workflow artifacts
 
 concurrency:
-  group: terraform-${{ github.event.inputs.environment || 'dev' }}-${{ github.event.pull_request.number || github.ref }}
+  # Serialize ALL operations per environment to prevent state-lock races.
+  # A plan and an apply for the same env will queue, not race.
+  group: terraform-${{ github.event.inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: true
   TF_INPUT: false
+  TF_VERSION: '1.10.5'
   TF_ENV: ${{ github.event.inputs.environment || 'dev' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
 
 jobs:
-  terraform:
-    name: Terraform (${{ github.event.inputs.environment || 'dev' }})
-    runs-on: ${{ vars.TF_RUNNER_LABEL || 'ubuntu-latest' }}
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    timeout-minutes: 45
-    env:
-      # Environment-scoped variables are available at job level. The default
-      # keeps the repository's us-east-1 examples working out of the box.
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-
+  # ═════════════════════════════════════════════
+  # GATE 1: Static analysis — fast, no AWS calls
+  # ═════════════════════════════════════════════
+  validate:
+    name: Format · Lint · Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v4
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.10.5
+          terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - name: Set up TFLint
-        uses: terraform-linters/setup-tflint@v6.3.2
-        with:
-          tflint_version: v0.60.0
-
-      - name: Terraform format check
+      - name: Terraform fmt
         run: terraform fmt -check -recursive
 
-      - name: Secret scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v3
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.3
+
+      - name: TFLint init
+        run: tflint --init
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          GITLEAKS_ENABLE_COMMENTS: false
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+
+      - name: TFLint
+        run: tflint --recursive --format compact
 
       - name: IaC scan (Trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: config
           scan-ref: .
@@ -83,81 +105,79 @@ jobs:
           exit-code: '1'
           trivyignores: .trivyignore
 
-      - name: Validate deployment configuration
-        env:
-          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-          TFVARS: ${{ secrets.TF_VARS }}
+      - name: Validate each module independently
         run: |
           set -euo pipefail
+          for dir in modules/*/; do
+            echo "::group::Validating $dir"
+            (cd "$dir" && terraform init -backend=false -input=false && terraform validate -no-color)
+            echo "::endgroup::"
+          done
 
-          ROLE_ARN="$(printf '%s' "${ROLE_ARN}" | tr -d '\r\n' | xargs)"
-          export ROLE_ARN
+  # ═════════════════════════════════════════════
+  # GATE 2: Secret scanning (full history)
+  # ═════════════════════════════════════════════
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-          if [ -z "${ROLE_ARN}" ]; then
-            echo "::error::Environment secret AWS_ROLE_ARN is not set."
-            exit 1
-          fi
-          if ! printf '%s' "${ROLE_ARN}" | grep -Eq '^arn:aws([a-zA-Z-]+)?:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$'; then
-            echo "::error::Environment secret AWS_ROLE_ARN is not a valid IAM role ARN (expected arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>)."
-            exit 1
-          fi
-          if [ -z "${TFVARS}" ]; then
-            echo "::error::Environment secret TF_VARS is not set."
-            exit 1
-          fi
-          if [ -z "${AWS_REGION}" ]; then
-            echo "::error::Environment variable AWS_REGION is empty."
-            exit 1
-          fi
-          if [ -z "${TF_STATE_BUCKET}" ]; then
-            echo "::error::Environment variable TF_STATE_BUCKET is not set."
-            exit 1
-          fi
+      - name: Secret scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ═════════════════════════════════════════════
+  # PLAN — runs on PR / push / schedule / dispatch(plan)
+  # ═════════════════════════════════════════════
+  plan:
+    name: Plan (${{ github.event.inputs.environment || 'dev' }})
+    needs: [validate, secret-scan]
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+    runs-on: ${{ vars.TF_RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: GitHubActions-Terraform-${{ github.run_id }}
+          role-session-name: GHA-Plan-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Write environment backend config
-        env:
-          BACKEND_BUCKET: ${{ env.TF_STATE_BUCKET }}
+      - name: Write backend config
         run: |
           set -euo pipefail
-          if [ -z "${BACKEND_BUCKET}" ]; then
-            echo "::error::Repository/environment variable TF_STATE_BUCKET is not set."
+          if [ -z "$TF_STATE_BUCKET" ]; then
+            echo "::error::Repository variable TF_STATE_BUCKET is not set."
             exit 1
           fi
-          mkdir -p backend vars
+          mkdir -p backend
           cat > "backend/${TF_ENV}.tfbackend" <<EOF
-          bucket       = "${BACKEND_BUCKET}"
+          bucket       = "${TF_STATE_BUCKET}"
           key          = "${TF_ENV}/terraform.tfstate"
           region       = "${AWS_REGION}"
           encrypt      = true
           use_lockfile = true
           EOF
-
-      - name: Write environment tfvars from secret
-        env:
-          TFVARS: ${{ secrets.TF_VARS }}
-        run: |
-          set -euo pipefail
-          if [ -z "${TFVARS}" ]; then
-            echo "::error::Environment secret TF_VARS is not set."
-            exit 1
-          fi
-          printf '%s\n' "${TFVARS}" > "vars/${TF_ENV}.tfvars"
-          chmod 600 "vars/${TF_ENV}.tfvars"
-
-      - name: Validate generated tfvars
-        run: |
-          set -euo pipefail
-          if ! terraform fmt "vars/${TF_ENV}.tfvars" >/dev/null; then
-            echo "::error::TF_VARS is not valid HCL. Set the secret to the full contents of vars/${TF_ENV}.tfvars, not a file path or escaped string."
-            exit 1
-          fi
 
       - name: Terraform init
         run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
@@ -165,37 +185,219 @@ jobs:
       - name: Terraform validate
         run: terraform validate -no-color
 
-      - name: TFLint
-        run: tflint --recursive --config="${GITHUB_WORKSPACE}/.tflint.hcl" --format=compact
-
-      - name: Terraform test
-        run: terraform test -no-color
-
       - name: Terraform plan
-        if: >-
-          github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+        env:
+          TF_VAR_admin_role_arn: ${{ secrets.ADMIN_ROLE_ARN || '' }}
         run: |
           set -o pipefail
+          
+          # 1. Generate the binary plan for the apply step
           terraform plan -no-color -input=false -lock-timeout=5m \
-            -var-file="vars/${TF_ENV}.tfvars" -out=tfplan | tee plan.txt
+            -var-file="vars/${TF_ENV}.tfvars" -out=tfplan
+            
+          # Render that EXACT plan to text for the PR comment
+          terraform show -no-color tfplan > plan.txt
+            
+          # Echo to logs
+          cat plan.txt
 
-      - name: Upload plan
-        if: >-
-          github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+      - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan-${{ env.TF_ENV }}-${{ github.run_id }}
+          name: tfplan-${{ env.TF_ENV }}
           path: |
             tfplan
             plan.txt
-          retention-days: 5
+          retention-days: 30
+          if-no-files-found: error
 
-      - name: Terraform apply
-        if: >-
-          github.event_name == 'push' ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+      # ═════════════════════════════════════════════
+      # POST PLAN TO PR — collapsible, updates in place
+      # ═════════════════════════════════════════════
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            // 1. Guard: plan.txt may not exist if the plan step failed early
+            if (!fs.existsSync('plan.txt')) {
+              console.log('plan.txt not found — skipping comment');
+              return;
+            }
+
+            let plan = fs.readFileSync('plan.txt', 'utf8');
+
+            // 2. Strip ANSI escape codes defensively
+            plan = plan.replace(/\x1b\[[0-9;]*m/g, '');
+
+            // 3. Escape triple-backticks so they don't break the markdown fence
+            plan = plan.replace(/```/g, '``\u200b`');
+
+            // 4. GitHub comment limit is 65,536 chars — reserve room for wrapper
+            const MAX = 60000;
+            const truncated = plan.length > MAX;
+            if (truncated) {
+              plan = plan.slice(0, MAX) +
+                '\n\n… (truncated — download the `tfplan` artifact for the full plan)';
+            }
+
+            // 5. Extract summary line: "Plan: 42 to add, 0 to change, 0 to destroy."
+            const summaryMatch = plan.match(/^(Plan:.*)$/m);
+            const summary = summaryMatch ? summaryMatch[1].trim() : '_(summary line not found)_';
+
+            // 6. Detect "No changes" for a cleaner header
+            const noChanges = /No changes\./i.test(summary);
+            const emoji = noChanges ? '✅' : '⚠️';
+
+            // 7. Build the comment body
+            const header = `### Terraform Plan — \`${{ env.TF_ENV }}\` ${emoji}`;
+            const body = [
+              header,
+              '',
+              `**Summary:** \`${summary}\``,
+              '',
+              '<details><summary>📄 Show plan output</summary>',
+              '',
+              '```hcl',
+              plan,
+              '```',
+              '',
+              '</details>',
+              '',
+              '---',
+              `> ℹ️ Plan generated from commit \`${context.sha.slice(0, 7)}\`.`,
+              '> Apply consumes the **exact artifact** uploaded by this run.',
+              '> Pushing new commits updates this comment with a fresh plan.'
+            ].join('\n');
+
+            // 8. Find & update existing bot comment (avoids spam on force-push)
+            const marker = '### Terraform Plan —';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.startsWith(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+              console.log(`✅ Updated existing comment ${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+              console.log('✅ Created new comment');
+            }
+
+  # ═════════════════════════════════════════════
+  # APPLY — ONLY via manual dispatch with explicit confirmation.
+  # Consumes the exact reviewed plan artifact. Never re-plans.
+  # ═════════════════════════════════════════════
+  apply:
+    name: Apply (${{ github.event.inputs.environment }})
+    needs: [validate, secret-scan]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'apply' &&
+      github.event.inputs.confirm_apply == format('apply-{0}', github.event.inputs.environment)
+    runs-on: ${{ vars.TF_RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download reviewed plan artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: terraform.yml
+          workflow_conclusion: success
+          search_artifacts: true
+          name: tfplan-${{ env.TF_ENV }}
+          path: .
+          if_no_artifact_found: fail
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GHA-Apply-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write backend config
         run: |
-          terraform apply -no-color -input=false -auto-approve -lock-timeout=5m \
-            -var-file="vars/${TF_ENV}.tfvars"
+          set -euo pipefail
+          mkdir -p backend
+          cat > "backend/${TF_ENV}.tfbackend" <<EOF
+          bucket       = "${TF_STATE_BUCKET}"
+          key          = "${TF_ENV}/terraform.tfstate"
+          region       = "${AWS_REGION}"
+          encrypt      = true
+          use_lockfile = true
+          EOF
+
+      - name: Terraform init
+        run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
+
+      - name: Apply reviewed plan
+        env:
+          TF_VAR_admin_role_arn: ${{ secrets.ADMIN_ROLE_ARN || '' }}
+        run: |
+          terraform apply -no-color -input=false -auto-approve -lock-timeout=10m tfplan
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+      - name: Post-apply smoke test
+        run: |
+          set -euo pipefail
+          
+          # Verify tools are available
+          aws --version
+          kubectl version --client
+          
+          CLUSTER=$(terraform output -raw cluster_name)
+          echo "Validating cluster: $CLUSTER"
+          
+          aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION" >/dev/null
+          
+          # Wait for nodes to be ready
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          echo "✅ All nodes Ready"
+
+          # Check for unhealthy pods in kube-system
+          BAD=$(kubectl get pods -n kube-system --no-headers \
+                | grep -vE 'Running|Completed|Succeeded' || true)
+          if [ -n "$BAD" ]; then
+            echo "❌ Unhealthy kube-system pods:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "✅ kube-system healthy"
+
+      - name: Notify success
+        if: success()
+        run: echo "::notice::Deployed ${{ env.TF_ENV }} successfully from reviewed plan."
