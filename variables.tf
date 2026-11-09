@@ -70,7 +70,6 @@ variable "admin_role_arn" {
   description = "Optional IAM role/user ARN to grant EKS cluster admin access. Strongly recommended in prod."
   type        = string
   default     = ""
-  ephemeral   = true
 
   validation {
     condition     = var.admin_role_arn == "" || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:(role|user)/.+$", var.admin_role_arn))
