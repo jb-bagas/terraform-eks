@@ -412,8 +412,6 @@ jobs:
         run: terraform init -backend-config="backend/${TF_ENV}.tfbackend" -reconfigure -input=false
 
       - name: Apply reviewed plan
-        env:
-          TF_VAR_admin_role_arn: ${{ secrets.ADMIN_ROLE_ARN || '' }}
         run: |
           terraform apply -no-color -input=false -auto-approve -lock-timeout=10m tfplan
 
