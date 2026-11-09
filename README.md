@@ -111,7 +111,7 @@ See [docs/decisions](docs/decisions/) for the architecture decision records.
 | Secrets Store CSI provider | ✅ Running with `sts.amazonaws.com` and `pods.eks.amazonaws.com` token audiences |
 | Static analysis and Terraform tests | ✅ TFLint 0 warnings, 3 tests, Gitleaks clean, Trivy 0 high/critical (3 documented exceptions) |
 | GitHub OIDC provider and roles | ✅ `dev` and `prod` roles created; dev role has EKS admin access |
-| GitHub Actions plan/apply run | ⏳ Pending GitHub environment secrets and a workflow rerun |
+| GitHub Actions plan/apply run | ✅ `dev` plan posted as PR comment; apply consumed the reviewed `tfplan` artifact; smoke test passed |
 | ALB-hosted demo application screenshot | ⏳ Phase 4 |
 | AMP, X-Ray, or Grafana screenshot | ⏳ Phase 4 |
 | Before/after incident evidence | ⏳ Phase 4 |
@@ -260,13 +260,15 @@ The script is in [`scripts/smoke-test-ebs.sh`](scripts/smoke-test-ebs.sh) and do
 
 ## 🔁 CI/CD
 
-The workflow in [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) runs:
+- **Pull request:** `terraform fmt -check`, `validate`, TFLint, Trivy, Gitleaks, and `terraform test`, followed by `plan` for the target environment. The plan is posted as a collapsible, auto-updating PR comment and uploaded as a binary `tfplan` artifact.
+- **Push to `main`:** refreshes the plan for `dev`. No apply is triggered automatically.
+- **Manual dispatch:** choose `dev` or `prod` and `plan` or `apply`. Applying requires typing `apply-<environment>` into the confirmation field to prevent accidental deploys.
+- **Scheduled (weekly):** drift detection runs `plan` on Mondays at 06:00 UTC.
+- **Apply consumes the exact plan artifact** from the most recent successful plan run — `terraform apply tfplan` is used, never a fresh plan. If the artifact has expired (30-day retention) or no plan exists, apply fails closed.
+- **Post-apply smoke test** waits for nodes to reach `Ready` and asserts no unhealthy pods in `kube-system` before reporting success.
+- **Concurrency control:** all operations are serialized per environment (`group: terraform-<env>`), preventing plan/apply races on the same state.
 
-- **Pull request:** `terraform fmt -check`, `validate`, and `plan` for `dev`.
-- **Push to `main`:** `terraform apply` for `dev`.
-- **Manual dispatch:** choose `dev` or `prod` and `plan` or `apply`. The `prod` GitHub Environment can require reviewers.
-
-The bootstrap layer creates the OIDC provider and environment-scoped roles when `github_repository` is set. The role must also be listed in `additional_admin_role_arns` in `TF_VARS` so Terraform can authenticate to Kubernetes. Configure the GitHub environment variables and secrets as described in [docs/github-oidc.md](docs/github-oidc.md).
+The bootstrap layer creates the OIDC provider and environment-scoped roles when `github_repository` is set. The role must also be listed in `additional_admin_role_arns` in `vars/<env>.tfvars` so Terraform can authenticate to Kubernetes with that role. Configure the GitHub environment variables and secrets as described in [docs/github-oidc.md](docs/github-oidc.md).
 
 > **CI quality gates:** the workflow runs format, TFLint, `terraform test`, Gitleaks, and Trivy before plan/apply. Trivy exceptions are documented in [`.trivyignore`](.trivyignore). Gitleaks requires a free `GITLEAKS_LICENSE` secret for organization-owned repositories; personal repositories do not need one.
 
@@ -373,7 +375,7 @@ This is a portfolio reference implementation, not a finished production platform
 - **No disaster recovery:** there is no cross-region state replication, cluster restore procedure, or persistent-data backup runbook.
 - **No GitOps:** Helm releases are applied by Terraform. Argo CD/Flux would provide continuous reconciliation and cleaner promotion.
 - **No OPA/admission policy-as-code yet:** TFLint, Trivy, Gitleaks, and `terraform test` are present, but Kubernetes admission policy and OPA/Conftest are not.
-- **Observability is not fully evidenced:** the AMP/AMG/ADOT path is plan-tested; the current `dev` variables have observability disabled, and AMG requires IAM Identity Center.
+- **Observability is not fully evidenced:** the AMP/AMG/ADOT path is plan-tested. In `dev`, observability is toggled off by default to keep costs low, and AMG requires IAM Identity Center to be enabled. Phase 4 will capture evidence with observability temporarily enabled.
 - **No cost guardrails:** no AWS Budgets, alerts, or Infracost check is committed.
 - **No SLOs or runbooks:** alert routing, error budgets, and on-call procedures are out of scope for the MVP.
 - **Custom modules have a maintenance cost:** see [ADR 0001](docs/decisions/0001-custom-modules.md).
@@ -401,8 +403,8 @@ The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/p
 
 1. **Phase 1 (complete):** portfolio narrative, ADRs, limitations, and cost profile.
 2. **Phase 2 (complete):** `scripts/smoke-test-ebs.sh` and `make smoke-test-ebs`.
-3. **Phase 3 (complete, commit `14f3b14`):** `tflint`, Trivy, Gitleaks, and `terraform test` gates. CI environment-scoping fix pending.
-4. **Phase 4:** CI, cluster, ingress, and observability evidence.
+3. **Phase 3 (complete):** `tflint`, Trivy, Gitleaks, and `terraform test` gates; hardened OIDC workflow with per-environment role scoping, PR plan comments, artifact-based apply, weekly drift detection, and a post-apply smoke test.
+4. **Phase 4 (in progress):** capture CI (green workflow run, PR plan comment), cluster (`kubectl get nodes`, PVC bind), ingress (ALB-hosted demo app), and observability (AMP series, AMG dashboard, X-Ray trace) evidence.
 5. **Phase 5:** production-readiness backlog: multi-account, DR, GitOps, cost, and SLOs.
 
 ## Troubleshooting
@@ -410,10 +412,10 @@ The phased plan and verification gates are in [docs/portfolio-roadmap.md](docs/p
 - **`terraform init` cannot find the backend bucket:** run `make bootstrap` first and verify `bucket_name` in `bootstrap/terraform.tfvars`.
 - **`terraform plan` cannot authenticate to Kubernetes:** set `admin_role_arn` to a valid IAM role/user ARN, not an STS assumed-role session ARN. The principal Terraform runs as must be this ARN (or otherwise have cluster admin) so the Helm/Kubernetes providers can authenticate.
 - **Helm releases time out:** check that the EKS endpoint is reachable from where Terraform runs. Prod is private by default.
-- **`configure-aws-credentials` says `Input required and not supplied: aws-region`:** set the `AWS_REGION` environment variable on the GitHub environment (the workflow defaults to `us-east-1`), or set `TF_STATE_BUCKET`/`AWS_ROLE_ARN`/`TF_VARS` if the preflight step names them.
-- **`terraform apply` reports `Argument or block definition required` on `vars/dev.tfvars`:** the `TF_VARS` secret contains a path or escaped string rather than HCL. Set it to the actual file contents: `gh secret set TF_VARS --env dev -R jb-bagas/terraform-eks < vars/dev.tfvars`.
+- **`configure-aws-credentials` says `Input required and not supplied: aws-region`:** set the `AWS_REGION` repository variable (the workflow falls back to `us-east-1`), and ensure the `AWS_ROLE_ARN` and `TF_STATE_BUCKET` variables are configured on the target GitHub Environment.
+- **`terraform plan` cannot authenticate to Kubernetes / Helm providers:** the `ADMIN_ROLE_ARN` secret on the GitHub Environment `<env>` is not set, or it points at an ARN from a different AWS account. Run `gh secret list --env dev` to verify, and confirm the ARN matches `additional_admin_role_arns` in `vars/<env>.tfvars`.
 - **GitHub Actions OIDC returns `AccessDenied` / `Not authorized to perform sts:AssumeRoleWithWebIdentity`:** verify `AWS_ROLE_ARN` matches the environment role. Newer GitHub subjects include immutable IDs (`repo:owner@id/repo@id:environment:dev`), so the trust policy must use `StringLike` with both the legacy and immutable forms; see [docs/github-oidc.md](docs/github-oidc.md).
-- **GitHub OIDC works but Kubernetes authentication fails:** add the GitHub role ARN to `additional_admin_role_arns` in the environment `TF_VARS` and apply the EKS access entry.
+- **GitHub OIDC works but Kubernetes authentication fails:** add the GitHub role ARN to `additional_admin_role_arns` in `vars/<env>.tfvars`, commit, and let CI apply the change so the EKS access entry is created.
 - **`The web identity token provided could not be validated`:** the role ARN may belong to a previous sandbox account, or the OIDC thumbprints are stale. Re-run bootstrap in the current account, update `AWS_ROLE_ARN` and `TF_VARS` from its outputs, and refresh the provider thumbprints.
 - **AMG creation fails:** enable IAM Identity Center or change the authentication provider before applying.
 - **Cluster Autoscaler does not scale:** verify the node-group tags and that `cluster_autoscaler_image_tag` (default `v<cluster_version>.0`) matches an image tag for the cluster minor version.
