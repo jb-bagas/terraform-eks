@@ -7,6 +7,8 @@ on:
       - '**.tf'
       - '**.tfvars'
       - '**.tfbackend'
+      - 'vars/staging.tfvars.example'
+      - 'backend/staging.tfbackend.example'
       - 'modules/**'
       - '.github/workflows/terraform.yml'
       - '.tflint.hcl'
@@ -17,6 +19,8 @@ on:
       - '**.tf'
       - '**.tfvars'
       - '**.tfbackend'
+      - 'vars/staging.tfvars.example'
+      - 'backend/staging.tfbackend.example'
       - 'modules/**'
       - '.github/workflows/terraform.yml'
   workflow_dispatch:
@@ -80,7 +84,11 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform fmt
-        run: terraform fmt -check -recursive
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive
+          terraform fmt -check - < vars/staging.tfvars.example >/dev/null
+          terraform fmt -check - < backend/staging.tfbackend.example >/dev/null
 
       - name: Set up TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -133,7 +141,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ═════════════════════════════════════════════
-  # PLAN — runs on PR / push / schedule / dispatch(plan)
+  # PLAN — runs on PR / push / schedule / dispatch(plan or confirmed apply)
   # ═════════════════════════════════════════════
   plan:
     name: Plan (${{ github.event.inputs.environment || 'dev' }})
@@ -142,7 +150,16 @@ jobs:
       github.event_name == 'pull_request' ||
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+      (
+        github.event_name == 'workflow_dispatch' &&
+        (
+          github.event.inputs.action == 'plan' ||
+          (
+            github.event.inputs.action == 'apply' &&
+            github.event.inputs.confirm_apply == format('apply-{0}', github.event.inputs.environment)
+          )
+        )
+      )
     runs-on: ${{ vars.TF_RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 45
     environment: ${{ github.event.inputs.environment || 'dev' }}
@@ -256,7 +273,7 @@ jobs:
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan-${{ env.TF_ENV }}
+          name: tfplan-${{ env.TF_ENV }}-${{ github.run_id }}
           path: |
             tfplan
             plan.txt
@@ -357,11 +374,11 @@ jobs:
 
   # ═════════════════════════════════════════════
   # APPLY — ONLY via manual dispatch with explicit confirmation.
-  # Consumes the exact reviewed plan artifact. Never re-plans.
+  # Consumes the plan artifact generated earlier in this same workflow run.
   # ═════════════════════════════════════════════
   apply:
     name: Apply (${{ github.event.inputs.environment }})
-    needs: [validate, secret-scan]
+    needs: [validate, secret-scan, plan]
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.action == 'apply' &&
@@ -379,15 +396,11 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - name: Download reviewed plan artifact
-        uses: dawidd6/action-download-artifact@v6
+      - name: Download plan artifact from this run
+        uses: actions/download-artifact@v4
         with:
-          workflow: terraform.yml
-          workflow_conclusion: success
-          search_artifacts: true
-          name: tfplan-${{ env.TF_ENV }}
+          name: tfplan-${{ env.TF_ENV }}-${{ github.run_id }}
           path: .
-          if_no_artifact_found: fail
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
