@@ -1,0 +1,6 @@
+# Copy to backend/staging.tfbackend and replace the bucket with your state bucket.
+bucket       = "your-org-terraform-state-bucket"
+key          = "staging/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

@@ -1,0 +1,53 @@
+# Copy to vars/staging.tfvars for local use, or use these HCL values in the
+# GitHub staging environment's TF_VARS secret. Replace the example IAM/secret
+# ARNs before running Terraform.
+environment     = "staging"
+project_name    = "eks-platform"
+aws_region      = "us-east-1"
+cluster_version = "1.36" # Supported by EKS in us-east-1; verify before upgrades.
+
+vpc_cidr           = "10.2.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# Set this to the platform administrator IAM role/user ARN.
+admin_role_arn = "arn:aws:iam::111122223333:role/PlatformStagingAdmin"
+
+# Include the staging GitHub Actions OIDC role so Terraform can manage
+# Kubernetes and Helm add-ons after the cluster is created.
+additional_admin_role_arns = [
+  "arn:aws:iam::111122223333:role/github-actions-eks-platform-staging",
+]
+
+# The EKS API is private. The GitHub Actions runner must be VPC-connected or
+# have routed access; add its source CIDR below if it is outside the VPC.
+enable_public_endpoint        = false
+public_access_cidrs           = []
+cluster_endpoint_access_cidrs = []
+
+# Restrict this to the staging application's Secrets Manager secret ARNs.
+secrets_manager_secret_arns = [
+  "arn:aws:secretsmanager:us-east-1:111122223333:secret:staging/catalog-EXAMPLE",
+]
+
+enable_alb_controller     = true
+enable_ebs_csi            = true
+enable_secrets_csi        = true
+enable_cluster_autoscaler = true
+enable_metrics_server     = true
+enable_observability      = false
+
+node_groups = {
+  general = {
+    instance_types = ["t3.large"]
+    min_size       = 2
+    max_size       = 6
+    desired_size   = 2
+    disk_size      = 50
+    capacity_type  = "ON_DEMAND"
+    labels = {
+      role        = "general"
+      environment = "staging"
+    }
+    taints = []
+  }
+}

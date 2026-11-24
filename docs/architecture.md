@@ -5,10 +5,11 @@
 ```mermaid
 flowchart TB
   subgraph GitHub["GitHub"]
-    PR["Pull request"] --> Plan["terraform plan"]
-    Merge["Merge to main"] --> Apply["terraform apply"]
-    Manual["workflow_dispatch<br/>dev / prod"] --> Plan
-    Manual --> Apply
+    PR["Pull request"] --> Gates["Quality gates"]
+    Gates --> Plan["terraform plan"]
+    Push["Push to main"] --> Plan
+    Manual["workflow_dispatch<br/>dev / staging / prod"] --> Plan
+    Manual --> Apply["Confirmed terraform apply"]
   end
 
   Plan --> OIDC["AWS OIDC role"]
@@ -74,7 +75,7 @@ flowchart TB
 | Metrics | ADOT Collector scrapes annotated pods and node kubelets, remote-writes to AMP with SigV4 |
 | Traces | ADOT Collector receives OTLP and exports to X-Ray |
 | Dashboards | Amazon Managed Grafana with AMP, CloudWatch, and X-Ray data sources |
-| Delivery | GitHub Actions OIDC, plan on PR, apply on merge, manual prod apply with environment approval |
+| Delivery | GitHub Actions OIDC, plans on PR/push/schedule, manually confirmed apply for configured environments, optional GitHub Environment approval |
 
 ## Request path
 

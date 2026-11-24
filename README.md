@@ -9,10 +9,11 @@ A reusable, multi-environment AWS EKS platform built with Terraform. One root mo
 ```mermaid
 flowchart TB
   subgraph GitHub["GitHub"]
-    PR["Pull request"] --> Plan["terraform plan"]
-    Merge["Merge to main"] --> Apply["terraform apply"]
-    Manual["workflow_dispatch<br/>dev / prod"] --> Plan
-    Manual --> Apply
+    PR["Pull request"] --> Gates["Quality gates"]
+    Gates --> Plan["terraform plan"]
+    Push["Push to main"] --> Plan
+    Manual["Manual dispatch<br/>dev / staging / prod"] --> Plan
+    Manual --> Apply["Confirmed terraform apply"]
   end
 
   Plan --> OIDC["AWS OIDC role"]
@@ -95,7 +96,7 @@ See [docs/decisions](docs/decisions/) for the architecture decision records.
   - Encrypted, versioned, public-access-blocked Terraform state bucket with native S3 locking.
 - **Production networking:** three AZs, private worker subnets, one NAT per AZ in prod, VPC flow logs to CloudWatch.
 - **Observability built in:** ADOT scrapes annotated pods and node kubelets, remote-writes to AMP over SigV4, and exports OTLP traces to X-Ray. Grafana can query AMP, CloudWatch, and X-Ray.
-- **Safe delivery:** plan on every PR, apply on merge to `main`, and a manual prod workflow gated by a GitHub Environment approval.
+- **Safe delivery:** plans on PRs and pushes; applies require a manual dispatch, explicit environment confirmation, and any configured GitHub Environment approval.
 - **Operational guardrails:** node-group capacity validation, cluster name length validation, KMS alias isolation, and ignore-on-desired-size for Cluster Autoscaler.
 
 ## 📣 Portfolio evidence
@@ -156,9 +157,11 @@ terraform-eks/
 │   └── security/            # KMS key and alias
 ├── vars/
 │   ├── dev.tfvars.example
+│   ├── staging.tfvars.example
 │   └── prod.tfvars.example
 ├── backend/
 │   ├── dev.tfbackend.example
+│   ├── staging.tfbackend.example
 │   └── prod.tfbackend.example
 └── .github/workflows/
     └── terraform.yml        # OIDC plan/apply pipeline
@@ -210,7 +213,7 @@ Set the real bucket name in `backend/dev.tfbackend`, then review `vars/dev.tfvar
 - `secrets_manager_secret_arns` can be narrowed from `["*"]` to your secret ARNs.
 - `node_groups` supports labels, taints, Spot/On-Demand, and a dedicated system group.
 
-For production, use the `prod` examples. Real `.tfvars` and `.tfbackend` files are git-ignored; never commit credentials or sensitive values.
+For staging, use the [staging configuration templates](docs/developer-cluster-request.md). They contain example IAM and Secrets Manager ARNs that must be replaced before planning. For production, use the `prod` examples. Real `.tfvars` and `.tfbackend` files are git-ignored; never commit credentials or sensitive values.
 
 ### 3. Initialize and deploy
 
@@ -230,7 +233,7 @@ make plan ENV=prod
 make apply ENV=prod
 ```
 
-Run `make destroy ENV=prod` only when you intend to tear down that environment. Staging is not configured in this repository.
+Run `make destroy ENV=prod` only when you intend to tear down that environment. The GitHub Actions workflow supports `staging`, but its OIDC role, GitHub Environment secrets, VPC-connected runner, and state configuration must be set up first; see the [developer cluster request scenario](docs/developer-cluster-request.md).
 
 ### 4. Access the cluster
 
@@ -260,15 +263,15 @@ The script is in [`scripts/smoke-test-ebs.sh`](scripts/smoke-test-ebs.sh) and do
 
 ## 🔁 CI/CD
 
-- **Pull request:** `terraform fmt -check`, `validate`, TFLint, Trivy, Gitleaks, and `terraform test`, followed by `plan` for the target environment. The plan is posted as a collapsible, auto-updating PR comment and uploaded as a binary `tfplan` artifact.
+- **Pull request:** `terraform fmt -check`, `validate`, TFLint, Trivy, Gitleaks, and `terraform test`, followed by a `dev` plan. The plan is posted as a collapsible, auto-updating PR comment and uploaded as a binary `tfplan` artifact.
 - **Push to `main`:** refreshes the plan for `dev`. No apply is triggered automatically.
-- **Manual dispatch:** choose `dev` or `prod` and `plan` or `apply`. Applying requires typing `apply-<environment>` into the confirmation field to prevent accidental deploys.
+- **Manual dispatch:** choose `dev`, `staging`, or `prod` and `plan` or `apply`. Applying requires typing `apply-<environment>` into the confirmation field to prevent accidental deploys. Configure the matching GitHub Environment before dispatching.
 - **Scheduled (weekly):** drift detection runs `plan` on Mondays at 06:00 UTC.
 - **Apply consumes the exact plan artifact** from the most recent successful plan run — `terraform apply tfplan` is used, never a fresh plan. If the artifact has expired (30-day retention) or no plan exists, apply fails closed.
 - **Post-apply smoke test** waits for nodes to reach `Ready` and asserts no unhealthy pods in `kube-system` before reporting success.
 - **Concurrency control:** all operations are serialized per environment (`group: terraform-<env>`), preventing plan/apply races on the same state.
 
-The bootstrap layer creates the OIDC provider and environment-scoped roles when `github_repository` is set. The role must also be listed in `additional_admin_role_arns` in `vars/<env>.tfvars` so Terraform can authenticate to Kubernetes with that role. Configure the GitHub environment variables and secrets as described in [docs/github-oidc.md](docs/github-oidc.md).
+The bootstrap layer creates the OIDC provider and environment-scoped roles when `github_repository` is set. The role must also be listed in `additional_admin_role_arns` in the environment's `TF_VARS` so Terraform can authenticate to Kubernetes with that role. Configure the GitHub environment variables and secrets as described in [docs/github-oidc.md](docs/github-oidc.md). For an end-to-end staging request, see the [developer cluster request scenario](docs/developer-cluster-request.md).
 
 > **CI quality gates:** the workflow runs format, TFLint, `terraform test`, Gitleaks, and Trivy before plan/apply. Trivy exceptions are documented in [`.trivyignore`](.trivyignore). Gitleaks requires a free `GITLEAKS_LICENSE` secret for organization-owned repositories; personal repositories do not need one.
 
