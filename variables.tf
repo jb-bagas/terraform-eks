@@ -219,3 +219,9 @@ variable "enable_observability" {
   type        = bool
   default     = true
 }
+
+variable "github_actions_role_name" {
+  description = "Name (not ARN) of the GitHub Actions OIDC role for this environment. Derives to a full ARN via the account ID."
+  type        = string
+  default     = ""
+}

@@ -227,19 +227,6 @@ jobs:
             exit 1
           fi
 
-      - name: Write environment tfvars from secret
-        env:
-          TFVARS: ${{ secrets.TF_VARS }}
-        run: |
-          set -euo pipefail
-          if [ -z "${TFVARS}" ]; then
-            echo "::error::Environment secret TF_VARS is not set."
-            exit 1
-          fi
-          mkdir -p vars
-          printf '%s\n' "${TFVARS}" > "vars/${TF_ENV}.tfvars"
-          chmod 600 "vars/${TF_ENV}.tfvars"
-
       - name: Validate generated tfvars
         run: |
           set -euo pipefail
@@ -257,6 +244,7 @@ jobs:
       - name: Terraform plan
         env:
           TF_VAR_admin_role_arn: ${{ secrets.ADMIN_ROLE_ARN || '' }}
+          TF_VAR_github_actions_role_name: github-actions-eks-platform-${{ env.TF_ENV }}
         run: |
           set -o pipefail
           

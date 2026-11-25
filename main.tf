@@ -31,6 +31,17 @@ locals {
     ManagedBy   = "terraform"
     Owner       = "jb-bagas"
   }
+
+  github_actions_role_arn = var.github_actions_role_name != "" ? (
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.github_actions_role_name}"
+  ) : ""
+
+  effective_additional_admin_role_arns = [
+    for arn in compact(distinct(concat(
+      var.additional_admin_role_arns,
+      local.github_actions_role_arn != "" ? [local.github_actions_role_arn] : [],
+    ))) : arn if arn != local.admin_principal_arn
+  ]
 }
 
 # ─────────────────────────────────────────────
@@ -82,7 +93,7 @@ module "eks" {
   endpoint_access_cidrs  = var.cluster_endpoint_access_cidrs
 
   admin_role_arn             = local.admin_principal_arn
-  additional_admin_role_arns = var.additional_admin_role_arns
+  additional_admin_role_arns = local.effective_additional_admin_role_arns
   common_tags                = local.common_tags
   node_groups                = var.node_groups
 }
